@@ -48,12 +48,17 @@ def key_over_time(
     sr: int,
     win_s: float = 30.0,
 ) -> tuple[np.ndarray, list[str], np.ndarray]:
-    """Camelot key per non-overlapping window. Returns (center times, keys, confidences)."""
-    win = int(win_s * sr)
-    n = len(y) // win
+    """Camelot key per non-overlapping window. Returns (center times, keys, confidences).
+
+    One chroma_stft pass over the whole signal, averaged per window — chroma_cqt per
+    window would take minutes on a multi-hour mix."""
+    hop = 2048
+    chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=hop)
+    win_f = max(1, int(win_s * sr / hop))
+    n = chroma.shape[1] // win_f
     times, keys, confs = [], [], []
     for i in range(n):
-        _, camelot, conf = estimate_key(y[i * win : (i + 1) * win], sr)
+        _, camelot, conf = _best_key(chroma[:, i * win_f : (i + 1) * win_f].mean(axis=1))
         times.append((i + 0.5) * win_s)
         keys.append(camelot)
         confs.append(conf)

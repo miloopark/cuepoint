@@ -1,0 +1,33 @@
+# Local dev infrastructure. The API and worker run on the host (see api/README notes);
+# production swaps these for Neon/Upstash/R2 equivalents.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cuepoint
+      POSTGRES_PASSWORD: cuepoint
+      POSTGRES_DB: cuepoint
+    ports:
+      # 5433 on the host: 5432 is taken by another local project (trellis-db)
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # S3-compatible object storage (MinIO's free images were discontinued).
+  # Production uses Cloudflare R2 with the same boto3 client.
+  seaweedfs:
+    image: chrislusf/seaweedfs
+    command: server -dir=/data -s3 -s3.port=8333 -ip.bind=0.0.0.0
+    ports:
+      - "8333:8333"
+    volumes:
+      - seaweeddata:/data
+
+volumes:
+  pgdata:
+  seaweeddata:
