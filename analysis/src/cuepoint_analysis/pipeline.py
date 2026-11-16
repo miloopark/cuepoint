@@ -13,13 +13,24 @@ from .transitions import Transition, detect_transitions
 
 ProgressFn = Callable[[float, str], None]
 
+# Boundaries weaker than this fraction of the median boundary strength are merge
+# candidates (dropped only when BPM and key agree on both sides).
+MERGE_REL_STRENGTH = 0.5
+
+
+def _nearest_key(key_times: np.ndarray, keys: list[str], t: float) -> str | None:
+    key_times = np.asarray(key_times)
+    if len(key_times) == 0:
+        return None
+    return keys[int(np.argmin(np.abs(key_times - t)))]
+
 
 def waveform_peaks(y: np.ndarray, n_bins: int = 1000) -> list[int]:
     """Downsampled |amplitude| peaks, scaled 0-100, for drawing the waveform."""
     chunks = np.array_split(np.abs(y), n_bins)
     peaks = [float(c.max()) if len(c) else 0.0 for c in chunks]
     top = max(peaks) or 1.0
-    return [int(round(p / top * 100)) for p in peaks]
+    return [round(p / top * 100) for p in peaks]
 
 
 def build_segments(
@@ -33,6 +44,31 @@ def build_segments(
 ) -> list[dict]:
     """One segment per detected track: boundaries at transition peaks, per-segment
     BPM (median of windows inside) and key (confidence-weighted majority vote)."""
+    # A boundary whose fused-novelty prominence is well below its peers *and*
+    # whose neighbors agree on BPM and key is almost always one track split in
+    # two — drop it before building segments.
+    if transitions:
+        strengths = np.array([t.strength for t in transitions])
+        median_strength = float(np.median(strengths))
+        kept = []
+        for t in transitions:
+            if t.strength >= MERGE_REL_STRENGTH * median_strength:
+                kept.append(t)
+                continue
+            before_mask = (bpm_times >= t.peak_s - 90) & (bpm_times < t.peak_s)
+            after_mask = (bpm_times >= t.peak_s) & (bpm_times < t.peak_s + 90)
+            same_bpm = (
+                before_mask.any()
+                and after_mask.any()
+                and abs(np.median(bpm_values[before_mask]) - np.median(bpm_values[after_mask])) <= 1.0
+            )
+            k1 = _nearest_key(key_times, keys, t.peak_s - 45)
+            k2 = _nearest_key(key_times, keys, t.peak_s + 45)
+            if same_bpm and k1 is not None and k1 == k2:
+                continue  # merge: weak boundary between identical-sounding neighbors
+            kept.append(t)
+        transitions = kept
+
     bounds = [0.0] + [t.peak_s for t in transitions] + [duration_s]
     segments = []
     for i in range(len(bounds) - 1):
@@ -84,14 +120,19 @@ def analyze_set(
     y, sr = load_audio(path)
     duration_s = len(y) / sr
 
-    progress(0.2, "detecting transitions")
-    transitions = detect_transitions(y, sr)
-
-    progress(0.55, "estimating tempo")
+    progress(0.2, "estimating tempo")
     bpm_times, bpm_values = bpm_over_time(y, sr)
 
-    progress(0.7, "detecting key")
+    progress(0.4, "detecting key")
     key_times, keys, key_confs = key_over_time(y, sr)
+
+    progress(0.55, "detecting transitions")
+    transitions = detect_transitions(
+        y,
+        sr,
+        bpm_series=(bpm_times, bpm_values),
+        key_series=(key_times, keys, key_confs),
+    )
 
     progress(0.85, "computing energy and waveform")
     energy_times, energy = energy_curve(y, sr)

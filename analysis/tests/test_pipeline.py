@@ -45,6 +45,32 @@ def test_build_segments_splits_at_transition_peaks():
     assert segments[2]["camelot_key"] == "10A"
 
 
+def test_build_segments_merges_weak_boundary_between_identical_tracks():
+    transitions = [
+        Transition(start_s=90.0, end_s=110.0, peak_s=100.0, strength=2.0),
+        Transition(start_s=190.0, end_s=210.0, peak_s=200.0, strength=0.1),  # spurious split
+    ]
+    bpm_times, bpm_values = _series([(50, 125), (150, 128), (250, 128)])
+    key_times = np.array([50.0, 150.0, 250.0])
+    keys = ["8A", "9A", "9A"]  # segments 2 and 3 are the same track
+    key_confs = np.array([0.9, 0.8, 0.8])
+
+    segments = build_segments(
+        duration_s=300.0,
+        transitions=transitions,
+        bpm_times=bpm_times,
+        bpm_values=bpm_values,
+        key_times=key_times,
+        keys=keys,
+        key_confs=key_confs,
+    )
+
+    assert len(segments) == 2
+    assert segments[1]["start_s"] == 100.0
+    assert segments[1]["end_s"] == 300.0
+    assert segments[1]["camelot_key"] == "9A"
+
+
 def test_build_segments_without_transitions_is_one_segment():
     bpm_times, bpm_values = _series([(50, 128)])
     segments = build_segments(

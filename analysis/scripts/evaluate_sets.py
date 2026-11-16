@@ -10,6 +10,7 @@ import numpy as np
 
 from cuepoint_analysis.audio import load_audio
 from cuepoint_analysis.evaluate import score_transitions
+from cuepoint_analysis.key import key_over_time
 from cuepoint_analysis.labels import parse_tracklist
 from cuepoint_analysis.tempo import bpm_over_time
 from cuepoint_analysis.transitions import detect_transitions
@@ -37,7 +38,9 @@ def main() -> None:
         truth = [e.start_s - offset for e in entries if 0 < e.start_s - offset < duration_s]
 
         t0 = time.time()
-        transitions = detect_transitions(y, sr)
+        bpm_series = bpm_over_time(y, sr)
+        key_series = key_over_time(y, sr)
+        transitions = detect_transitions(y, sr, bpm_series=bpm_series, key_series=key_series)
         detected = [t.peak_s for t in transitions]
         print(f"detected {len(detected)} transitions in {time.time() - t0:.0f}s (ground truth: {len(truth)})", flush=True)
 
@@ -49,11 +52,9 @@ def main() -> None:
                 flush=True,
             )
 
-        t0 = time.time()
-        _, bpm = bpm_over_time(y, sr)
+        bpm = bpm_series[1]
         print(
-            f"BPM median {np.median(bpm):.1f}, range {bpm.min():.0f}–{bpm.max():.0f} "
-            f"({time.time() - t0:.0f}s)",
+            f"BPM median {np.median(bpm):.1f}, range {bpm.min():.0f}–{bpm.max():.0f}",
             flush=True,
         )
 

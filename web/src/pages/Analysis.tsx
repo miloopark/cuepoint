@@ -39,6 +39,9 @@ interface SetView {
   segments: ViewSegment[];
   energy: number[]; // 0–1, ~160 points
   wave: number[]; // 0–100, 240 bars
+  /** Real analysis series, in seconds. */
+  bpmSeries: { times: number[]; values: number[] };
+  keySeries: { times: number[]; keys: string[]; confs: number[] };
   isSample: boolean;
   audioSrc: string | null;
   /** True once a recognition pass has run — unmatched segments then read "Unreleased ID". */
@@ -70,6 +73,15 @@ function sampleView(id: string): SetView {
     })),
     energy: Array.from({ length: 160 }, (_, i) => sampleEnergy(i / 159)),
     wave: sampleBars(240),
+    bpmSeries: {
+      times: sampleSegments.flatMap((s) => [s.startMin * 60 + 5, s.endMin * 60 - 5]),
+      values: sampleSegments.flatMap((s) => [s.bpm, s.bpm]),
+    },
+    keySeries: {
+      times: sampleSegments.map((s) => ((s.startMin + s.endMin) / 2) * 60),
+      keys: sampleSegments.map((s) => s.camelotKey),
+      confs: sampleSegments.map(() => 0.8),
+    },
     isSample: true,
     audioSrc: null,
     identified: true,
@@ -99,6 +111,12 @@ async function fetchView(id: string): Promise<SetView> {
     segments: analysis.segments.map(apiSegToView),
     energy: resample(analysis.features.energy, 160, mean),
     wave: resample(waveform.waveform, 240, (c) => Math.max(...c)),
+    bpmSeries: { times: analysis.features.bpm_times, values: analysis.features.bpm },
+    keySeries: {
+      times: analysis.features.key_times,
+      keys: analysis.features.keys,
+      confs: analysis.features.key_confidences,
+    },
     isSample: false,
     audioSrc: audioUrl(id),
     identified: analysis.identify_status === 'done',
@@ -215,6 +233,7 @@ export function Analysis() {
   const [importText, setImportText] = useState('');
   const [importBusy, setImportBusy] = useState(false);
   const [identifyBusy, setIdentifyBusy] = useState(false);
+  const [tkHover, setTkHover] = useState<number | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
@@ -265,17 +284,27 @@ export function Analysis() {
     return { points: pts.join(' '), clip: `polygon(${clip.join(', ')})` };
   }, [view]);
 
-  const bpmLane = useMemo(() => {
-    const bpms = segments.map((x) => x.bpm).filter((b) => b > 0);
-    if (!bpms.length) return { points: '', lo: 120, hi: 130 };
-    const lo = Math.min(...bpms) - 2;
-    const hi = Math.max(...bpms) + 2;
-    const y = (bpm: number) => (90 - ((bpm - lo) / Math.max(1, hi - lo)) * 80).toFixed(1);
-    const points = segments
-      .map((x) => `${((x.startMin / D) * 1000).toFixed(1)},${y(x.bpm)} ${((x.endMin / D) * 1000).toFixed(1)},${y(x.bpm)}`)
+  // One BPM scale drives both the timeline lane and the tempo chart; a minimum
+  // 8-BPM span keeps a steady-129 set visible instead of degenerating to a flat
+  // invisible line.
+  const bpmChart = useMemo(() => {
+    const { times, values } = view?.bpmSeries ?? { times: [], values: [] };
+    if (!values.length) {
+      return { points: '', lo: 120, hi: 130, times: [] as number[], values: [] as number[], y: (_v: number) => 50 };
+    }
+    let lo = Math.min(...values) - 2;
+    let hi = Math.max(...values) + 2;
+    if (hi - lo < 8) {
+      const mid = (hi + lo) / 2;
+      lo = mid - 4;
+      hi = mid + 4;
+    }
+    const y = (v: number) => 95 - ((v - lo) / (hi - lo)) * 85;
+    const points = values
+      .map((v, i) => `${((times[i] / 60 / D) * 1000).toFixed(1)},${y(v).toFixed(1)}`)
       .join(' ');
-    return { points, lo, hi };
-  }, [segments, D]);
+    return { points, lo: Math.round(lo), hi: Math.round(hi), times, values, y };
+  }, [view, D]);
 
   const waveColors = useMemo(
     () =>
@@ -390,6 +419,8 @@ export function Analysis() {
   const identified = segments.filter((x) => x.matchConfidence >= MATCH_THRESHOLD).length;
   const bpms = segments.map((x) => x.bpm).filter((b) => b > 0);
   const playheadMin = playing && currentMin !== null ? currentMin : s.startMin;
+  const playingSeg = segments.find((g) => playheadMin >= g.startMin && playheadMin < g.endMin) ?? s;
+  const liveBpm = playingSeg.bpm || 0;
   const tracklistText = segments
     .map((x) => `${formatTime(x.startMin)}  ${trackName(x, view.identified)}`)
     .join('\n');
@@ -426,6 +457,17 @@ export function Analysis() {
             </h1>
           </div>
           <div className="set-actions">
+            {playing && liveBpm > 0 && (
+              <span className="bpm-live" aria-label={`Playing at ${liveBpm} BPM`}>
+                <i
+                  key={liveBpm}
+                  aria-hidden="true"
+                  className="bpm-dot"
+                  style={{ animationDuration: `${(60 / Math.max(60, liveBpm)).toFixed(3)}s` }}
+                />
+                <b className="mono">{liveBpm}</b>
+              </span>
+            )}
             <button
               type="button"
               className="play-btn"
@@ -533,7 +575,7 @@ export function Analysis() {
               >
                 BPM
                 <small>
-                  {bpmLane.lo}–{bpmLane.hi}
+                  {bpmChart.lo}–{bpmChart.hi}
                 </small>
               </span>
             </div>
@@ -603,7 +645,7 @@ export function Analysis() {
               <div aria-hidden="true" className="lane lane-bpm">
                 <svg viewBox="0 0 1000 100" preserveAspectRatio="none">
                   <polyline
-                    points={bpmLane.points}
+                    points={bpmChart.points}
                     fill="none"
                     stroke="var(--ink)"
                     strokeWidth={2}
@@ -675,6 +717,101 @@ export function Analysis() {
                 <span className="mono-label muted">
                   {builds} build · {holds} hold · {drops} drop
                 </span>
+              </div>
+            </section>
+          );
+        })()}
+
+        {bpmChart.values.length > 0 && (() => {
+          const ts = bpmChart.times;
+          const vs = bpmChart.values;
+          let minI = 0;
+          let maxI = 0;
+          vs.forEach((v, i) => {
+            if (v < vs[minI]) minI = i;
+            if (v > vs[maxI]) maxI = i;
+          });
+          const keyW =
+            view.keySeries.times.length > 1
+              ? view.keySeries.times[1] - view.keySeries.times[0]
+              : 30;
+          return (
+            <section aria-label="Tempo and key over time" className="tempokey">
+              <div className="tr-head">
+                <span className="mono-label muted">Tempo & key over time</span>
+                <span className="mono-label muted">
+                  {bpmChart.lo}–{bpmChart.hi} BPM · key per 30 s window, darker = higher confidence
+                </span>
+              </div>
+              <div
+                className="tk-chart"
+                role="img"
+                aria-label={`Tempo over time, ${bpmChart.lo} to ${bpmChart.hi} BPM`}
+                onMouseMove={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  const tSec = ((e.clientX - r.left) / r.width) * D * 60;
+                  let best = 0;
+                  let bd = Infinity;
+                  for (let i = 0; i < ts.length; i++) {
+                    const d2 = Math.abs(ts[i] - tSec);
+                    if (d2 < bd) {
+                      bd = d2;
+                      best = i;
+                    }
+                  }
+                  setTkHover(best);
+                }}
+                onMouseLeave={() => setTkHover(null)}
+              >
+                <svg viewBox="0 0 1000 100" preserveAspectRatio="none">
+                  <polyline
+                    points={bpmChart.points}
+                    fill="none"
+                    stroke="var(--ink)"
+                    strokeWidth={2}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                </svg>
+                {maxI !== minI && (
+                  <span className="tk-label" style={{ left: `${pctD(ts[maxI] / 60)}%`, top: 0 }}>
+                    {Math.round(vs[maxI])}
+                  </span>
+                )}
+                <span className="tk-label" style={{ left: `${pctD(ts[minI] / 60)}%`, bottom: 0 }}>
+                  {Math.round(vs[minI])}
+                </span>
+                {tkHover !== null && (
+                  <>
+                    <div aria-hidden="true" className="tk-crosshair" style={{ left: `${pctD(ts[tkHover] / 60)}%` }} />
+                    <span className="tk-tip mono" style={{ left: `${pctD(ts[tkHover] / 60)}%` }}>
+                      {formatTime(ts[tkHover] / 60)} · {Math.round(vs[tkHover])} BPM
+                    </span>
+                  </>
+                )}
+                {playing && (
+                  <div aria-hidden="true" className="playhead" style={{ top: 0, bottom: 0, left: `${pctD(playheadMin)}%` }} />
+                )}
+              </div>
+              <div className="tk-keys" aria-label="Key per 30 second window">
+                {view.keySeries.times.map((t, i) => {
+                  const k = view.keySeries.keys[i];
+                  const conf = view.keySeries.confs[i];
+                  const clash =
+                    i > 0 && k !== view.keySeries.keys[i - 1] && !keysCompatible(view.keySeries.keys[i - 1], k);
+                  return (
+                    <span
+                      key={i}
+                      title={`${formatTime(t / 60)} — ${k} (${Math.round(conf * 100)}% confidence)`}
+                      className={clash ? 'is-clash' : undefined}
+                      style={{
+                        left: `${pctD((t - keyW / 2) / 60)}%`,
+                        width: `${pctD(keyW / 60)}%`,
+                        background: keyTint(k),
+                        opacity: 0.45 + 0.55 * conf,
+                      }}
+                    />
+                  );
+                })}
               </div>
             </section>
           );

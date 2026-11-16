@@ -8,9 +8,9 @@ import { formatTime, SAMPLE_DURATION_MIN, sampleBars } from '../lib/sample';
 const STAGES: [label: string, endsAt: number][] = [
   ['Download from storage', 2],
   ['Decode & resample', 20],
-  ['Transition detection', 55],
-  ['Tempo over time', 70],
-  ['Key over time', 85],
+  ['Tempo over time', 40],
+  ['Key over time', 55],
+  ['Transition detection', 85],
   ['Energy & waveform', 100],
 ];
 

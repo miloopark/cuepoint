@@ -2,7 +2,13 @@ import numpy as np
 from scipy.signal import butter, sosfilt
 
 from conftest import SR, click_track, sine_chord
-from cuepoint_analysis.transitions import detect_transitions
+from cuepoint_analysis.transitions import (
+    beat_blocks,
+    detect_transitions,
+    key_cue,
+    pick_peaks,
+    tempo_cue,
+)
 
 
 def _texture(kind: str, duration_s: float) -> np.ndarray:
@@ -30,3 +36,57 @@ def test_detects_single_splice_between_textures():
 def test_uniform_texture_yields_no_transitions():
     y = _texture("dark", 240.0)
     assert detect_transitions(y, SR) == []
+
+
+def test_pick_peaks_works_on_irregular_time_grid():
+    # Blocks of alternating duration (like beat-sync blocks under tempo drift).
+    dts = np.tile([6.0, 9.0], 50)
+    times = np.cumsum(dts)
+    novelty = np.zeros(len(times))
+    novelty[40] = 2.0
+    transitions = pick_peaks(novelty, times, sigma=1.0, min_spacing_s=90.0, min_prominence=0.3)
+    assert len(transitions) == 1
+    assert abs(transitions[0].peak_s - times[40]) < 1e-6
+
+
+def test_beat_blocks_on_click_track(click_128):
+    times, blocks = beat_blocks(click_128, SR, beats_per_block=8)
+    # 60 s at 128 BPM ≈ 128 beats → ~16 blocks of 8 beats (~3.75 s each)
+    assert blocks.shape[0] >= 10
+    assert len(times) == blocks.shape[0]
+    assert np.all(np.diff(times) > 0)
+    # rows are unit vectors (same normalization as fixed blocks)
+    norms = np.linalg.norm(blocks, axis=1)
+    assert np.allclose(norms[norms > 0], 1.0, atol=1e-3)
+
+
+def test_tempo_cue_peaks_at_bpm_jump():
+    block_times = np.arange(0.0, 300.0, 2.0)
+    bpm_times = np.arange(15.0, 300.0, 10.0)
+    bpm_values = np.where(bpm_times < 150.0, 124.0, 150.0)
+    cue = tempo_cue(block_times, bpm_times, bpm_values)
+    assert np.all((cue >= 0) & (cue <= 1))
+    assert cue[np.argmin(np.abs(block_times - 150.0))] > 0.8
+    assert cue[np.argmin(np.abs(block_times - 50.0))] < 0.1
+
+
+def test_key_cue_peaks_at_key_change():
+    block_times = np.arange(0.0, 300.0, 2.0)
+    key_times = np.arange(15.0, 300.0, 30.0)
+    keys = ["8A" if t < 150 else "3B" for t in key_times]  # distant jump on the wheel
+    confs = np.full(len(key_times), 0.9)
+    cue = key_cue(block_times, key_times, keys, confs)
+    assert np.all((cue >= 0) & (cue <= 1))
+    assert cue[np.argmin(np.abs(block_times - 150.0))] > 0.5
+    assert cue[np.argmin(np.abs(block_times - 50.0))] < 0.05
+
+
+def test_detect_transitions_accepts_cue_series():
+    y = np.concatenate([_texture("dark", 120.0), _texture("bright", 120.0)])
+    bpm_series = (np.array([60.0, 180.0]), np.array([124.0, 150.0]))
+    key_series = (np.array([60.0, 180.0]), ["8A", "3B"], np.array([0.9, 0.9]))
+    transitions = detect_transitions(
+        y, SR, bpm_series=bpm_series, key_series=key_series, tempo_weight=0.2, key_weight=0.2
+    )
+    assert len(transitions) == 1
+    assert abs(transitions[0].peak_s - 120.0) <= 15.0
