@@ -585,6 +585,18 @@ h1, h2, h3, p { margin: 0; }
 .is-seekable,
 .tk-chart { cursor: pointer; }
 
+.tk-legend { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.tk-legend > span { display: inline-flex; align-items: center; gap: 7px; }
+
+.tk-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 2px;
+  background: var(--ink);
+}
+
+.tk-swatch.is-key { background: var(--accent); }
+
 .tk-chart {
   position: relative;
   height: 130px;

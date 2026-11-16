@@ -412,9 +412,7 @@ export function Analysis() {
   if (loadError) {
     return (
       <>
-        <Nav>
-          <Link to="/#upload">Analyze a mix</Link>
-        </Nav>
+        <Nav />
         <main className="wrap page" style={{ paddingTop: 56 }}>
           <span className="mono-label muted">Set / {id}</span>
           <h1 className="set-title">Couldn’t load this set.</h1>
@@ -452,10 +450,7 @@ export function Analysis() {
 
   return (
     <>
-      <Nav>
-        <Link to="/#demo">Demo sets</Link>
-        <Link to="/#upload">Analyze a mix</Link>
-      </Nav>
+      <Nav />
 
       {view.audioSrc && (
         <audio
@@ -760,12 +755,37 @@ export function Analysis() {
             view.keySeries.times.length > 1
               ? view.keySeries.times[1] - view.keySeries.times[0]
               : 30;
+          // Key line: Camelot wheel position 1-12 stepped per window (1 at the
+          // bottom, 12 at the top). Its scale is the wheel, not BPM — the legend
+          // says so and the tooltip reports both exact values.
+          const keyY = (k: string) => 92 - (((parseInt(k, 10) || 1) - 1) / 11) * 84;
+          const keyPoints = view.keySeries.times
+            .map((t, i) => {
+              const y = keyY(view.keySeries.keys[i]).toFixed(1);
+              const x1 = ((Math.max(0, t - keyW / 2) / 60 / D) * 1000).toFixed(1);
+              const x2 = ((Math.min(D * 60, t + keyW / 2) / 60 / D) * 1000).toFixed(1);
+              return `${x1},${y} ${x2},${y}`;
+            })
+            .join(' ');
+          const hoverKeyIdx =
+            tkHover === null
+              ? null
+              : view.keySeries.times.reduce(
+                  (best, kt, i) =>
+                    Math.abs(kt - ts[tkHover]) < Math.abs(view.keySeries.times[best] - ts[tkHover]) ? i : best,
+                  0,
+                );
           return (
             <section aria-label="Tempo and key over time" className="tempokey">
               <div className="tr-head">
                 <span className="mono-label muted">Tempo & key over time</span>
-                <span className="mono-label muted">
-                  {bpmChart.lo}–{bpmChart.hi} BPM · key per 30 s window, darker = higher confidence
+                <span className="tk-legend mono-label muted">
+                  <span>
+                    <i aria-hidden="true" className="tk-swatch" /> BPM ({bpmChart.lo}–{bpmChart.hi})
+                  </span>
+                  <span>
+                    <i aria-hidden="true" className="tk-swatch is-key" /> Key (Camelot wheel 1–12)
+                  </span>
                 </span>
               </div>
               <div
@@ -791,6 +811,13 @@ export function Analysis() {
               >
                 <svg viewBox="0 0 1000 100" preserveAspectRatio="none">
                   <polyline
+                    points={keyPoints}
+                    fill="none"
+                    stroke="var(--accent)"
+                    strokeWidth={1.5}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                  <polyline
                     points={bpmChart.points}
                     fill="none"
                     stroke="var(--ink)"
@@ -811,6 +838,7 @@ export function Analysis() {
                     <div aria-hidden="true" className="tk-crosshair" style={{ left: `${pctD(ts[tkHover] / 60)}%` }} />
                     <span className="tk-tip mono" style={{ left: `${pctD(ts[tkHover] / 60)}%` }}>
                       {formatTime(ts[tkHover] / 60)} · {Math.round(vs[tkHover])} BPM
+                      {hoverKeyIdx !== null && ` · ${view.keySeries.keys[hoverKeyIdx]}`}
                     </span>
                   </>
                 )}
