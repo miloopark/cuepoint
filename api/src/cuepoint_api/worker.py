@@ -4,6 +4,7 @@ Run with:  rq worker --worker-class rq.SimpleWorker analysis
 (SimpleWorker: no fork per job — macOS + numpy/Accelerate deadlock under fork.)"""
 
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from .config import settings
 from .db import SessionLocal, engine
 from .identify import ALLOWED_FORMATS, probe_format
 from .models import Base, SegmentRecord, SetRecord
-from .queueing import publish_progress
+from .queueing import enqueue_identify, publish_progress
 from .storage import download_to, head_size
 
 
@@ -88,6 +89,12 @@ def run_analysis(set_id: str) -> None:
                 )
             db.commit()
         publish_progress(set_id, 1.0, "done")
+
+        # With a recognition token configured, new uploads name themselves:
+        # queue identification as soon as analysis lands.
+        if settings.audd_token:
+            _update_set(set_id, identify_status="running", identify_started_at=time.time())
+            enqueue_identify(set_id)
     except Exception:
         # Full traceback goes to the worker log only; API consumers get a generic message.
         print(f"[worker] analysis failed for set {set_id}\n{traceback.format_exc()}", flush=True)

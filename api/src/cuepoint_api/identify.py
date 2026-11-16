@@ -43,6 +43,11 @@ def probe_format(src: Path) -> str | None:
     return proc.stdout.decode().strip() or None
 
 
+class AuddError(RuntimeError):
+    """The API itself failed (bad token, quota, server error) — distinct from
+    'recognized nothing', which is a normal outcome."""
+
+
 def parse_audd_response(data: dict) -> tuple[str, str] | None:
     """(artist, title) when AudD recognized the clip, else None."""
     if data.get("status") != "success":
@@ -65,7 +70,10 @@ def _recognize_clip(http: urllib3.PoolManager, clip_path: Path) -> tuple[str, st
         fields={"api_token": settings.audd_token, "file": ("clip.mp3", body, "audio/mpeg")},
         timeout=urllib3.Timeout(total=30),
     )
-    return parse_audd_response(json.loads(r.data))
+    data = json.loads(r.data)
+    if data.get("status") == "error":
+        raise AuddError(str(data.get("error")))
+    return parse_audd_response(data)
 
 
 def _cut_clip(src: Path, mid_s: float, out: Path) -> bool:
@@ -100,6 +108,7 @@ def run_identify(set_id: str) -> None:
             if fmt not in ALLOWED_FORMATS:
                 raise ValueError(f"unsupported or unsafe container format: {fmt!r}")
 
+            consecutive_api_errors = 0
             with SessionLocal() as db:
                 rec = db.get(SetRecord, set_id)
                 for i, seg in enumerate(rec.segments):
@@ -108,8 +117,17 @@ def run_identify(set_id: str) -> None:
                     clip = Path(tmp) / f"seg{i}.mp3"
                     mid = (seg.start_s + seg.end_s) / 2
                     match = None
-                    if _cut_clip(audio, mid, clip):
-                        match = _recognize_clip(http, clip)
+                    try:
+                        if _cut_clip(audio, mid, clip):
+                            match = _recognize_clip(http, clip)
+                        consecutive_api_errors = 0
+                    except AuddError as e:
+                        # Leave the segment untouched; a dead token/quota must
+                        # fail the job, not mislabel everything "unreleased".
+                        consecutive_api_errors += 1
+                        if consecutive_api_errors >= 3:
+                            raise ValueError(f"recognition API failing: {e}") from e
+                        continue
                     if match is not None:
                         seg.artist, seg.title = match
                         seg.match_confidence = MATCH_CONFIDENCE

@@ -46,6 +46,7 @@ interface SetView {
   audioSrc: string | null;
   /** True once a recognition pass has run — unmatched segments then read "Unreleased ID". */
   identified: boolean;
+  identifyStatus: 'running' | 'done' | 'failed' | null;
 }
 
 function resample(values: number[], n: number, reduce: (chunk: number[]) => number): number[] {
@@ -85,6 +86,7 @@ function sampleView(id: string): SetView {
     isSample: true,
     audioSrc: null,
     identified: true,
+    identifyStatus: 'done',
   };
 }
 
@@ -120,6 +122,7 @@ async function fetchView(id: string): Promise<SetView> {
     isSample: false,
     audioSrc: audioUrl(id),
     identified: analysis.identify_status === 'done',
+    identifyStatus: analysis.identify_status,
   };
 }
 
@@ -257,6 +260,17 @@ export function Analysis() {
     const t = window.setTimeout(() => setToast(null), 1800);
     return () => window.clearTimeout(t);
   }, [toast]);
+
+  // Auto-identification runs right after analysis; refresh until it lands.
+  useEffect(() => {
+    if (isDemo || view?.identifyStatus !== 'running') return;
+    const t = window.setTimeout(() => {
+      fetchView(id)
+        .then(setView)
+        .catch(() => {});
+    }, 4000);
+    return () => window.clearTimeout(t);
+  }, [id, isDemo, view]);
 
   const segments = view?.segments ?? [];
   const s = segments[Math.min(sel, Math.max(0, segments.length - 1))];
