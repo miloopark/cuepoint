@@ -217,17 +217,19 @@ async def set_events(set_id: str) -> StreamingResponse:
 def import_tracklist(set_id: str, req: TracklistRequest) -> dict:
     """Name segments from a pasted tracklist: each segment takes the entry whose
     time interval contains the segment's midpoint."""
-    entries = parse_tracklist(req.text)
-    if not entries:
-        raise HTTPException(status_code=400, detail="no timestamped lines found in tracklist")
-    entries.sort(key=lambda e: e.start_s)
-
     with SessionLocal() as db:
         rec = _set_or_404(db, set_id)
-        if not secrets.compare_digest(rec.edit_token or "", req.edit_token):
+        # Authorize before touching attacker-supplied text; encode so non-ASCII
+        # tokens fail the comparison instead of raising.
+        if not secrets.compare_digest((rec.edit_token or "").encode(), req.edit_token.encode()):
             raise HTTPException(status_code=403, detail="not allowed to edit this set")
         if rec.status != "done":
             raise HTTPException(status_code=409, detail="import after analysis finishes")
+
+        entries = parse_tracklist(req.text)
+        if not entries:
+            raise HTTPException(status_code=400, detail="no timestamped lines found in tracklist")
+        entries.sort(key=lambda e: e.start_s)
         named = 0
         for seg in rec.segments:
             midpoint = (seg.start_s + seg.end_s) / 2 + req.offset_s
