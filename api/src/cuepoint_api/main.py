@@ -23,7 +23,7 @@ from sqlalchemy import update as sa_update
 from .config import settings
 from .db import SessionLocal, engine
 from .models import Base, SetRecord
-from .queueing import enqueue_analysis, enqueue_identify, read_progress
+from .queueing import IDENTIFY_JOB_TIMEOUT_S, enqueue_analysis, enqueue_identify, read_progress
 from .storage import ensure_bucket, head_size, presign_get, presign_put
 
 
@@ -268,9 +268,9 @@ def identify_set(set_id: str, req: EditRequest) -> dict:
             raise HTTPException(status_code=403, detail="not allowed to edit this set")
         if rec.status != "done":
             raise HTTPException(status_code=409, detail="identify after analysis finishes")
-        # Atomic claim; a "running" older than the job timeout is a dead worker
-        # and may be retried.
-        stale_before = time.time() - 1800
+        # Atomic claim; strictly beyond the job timeout (worker heartbeats
+        # started_at while alive), a "running" is a dead worker — retryable.
+        stale_before = time.time() - 2 * IDENTIFY_JOB_TIMEOUT_S
         claimed = db.execute(
             sa_update(SetRecord)
             .where(SetRecord.id == set_id)
@@ -288,13 +288,15 @@ def identify_set(set_id: str, req: EditRequest) -> dict:
         db.commit()
     try:
         enqueue_identify(set_id)
-    except RedisError:
+    except Exception as e:  # noqa: BLE001 — any failure must revert the claim
         with SessionLocal() as db:
             rec = db.get(SetRecord, set_id)
             if rec is not None:
                 rec.identify_status = "failed"
                 db.commit()
-        raise HTTPException(status_code=503, detail="job queue unavailable")
+        if isinstance(e, RedisError):
+            raise HTTPException(status_code=503, detail="job queue unavailable")
+        raise
     return {"identify_status": "running"}
 
 

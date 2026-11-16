@@ -21,9 +21,12 @@ def enqueue_analysis(set_id: str) -> None:
     )
 
 
+IDENTIFY_JOB_TIMEOUT_S = 1800
+
+
 def enqueue_identify(set_id: str) -> None:
     Queue(ANALYSIS_QUEUE, connection=get_redis()).enqueue(
-        "cuepoint_api.identify.run_identify", set_id, job_timeout=1800
+        "cuepoint_api.identify.run_identify", set_id, job_timeout=IDENTIFY_JOB_TIMEOUT_S
     )
 
 

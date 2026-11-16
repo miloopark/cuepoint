@@ -9,6 +9,7 @@ never overwritten."""
 import json
 import subprocess
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -22,6 +23,24 @@ from .storage import download_to
 AUDD_URL = "https://api.audd.io/"
 MATCH_CONFIDENCE = 0.85  # acoustic match, slightly below tracklist-import's 0.95
 CLIP_S = 12.0
+
+# ffprobe format_name values we accept. Anything else — hls, concat, image2 and
+# friends — is a container that can reference other files, not uploaded audio.
+ALLOWED_FORMATS = {"mp3", "wav", "flac", "aiff", "ogg", "aac", "mov,mp4,m4a,3gp,3g2,mj2"}
+
+
+def probe_format(src: Path) -> str | None:
+    proc = subprocess.run(
+        ["ffprobe", "-v", "error", "-protocol_whitelist", "file,crypto",
+         "-show_entries", "format=format_name",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(src)],
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.decode().strip() or None
 
 
 def parse_audd_response(data: dict) -> tuple[str, str] | None:
@@ -77,6 +96,10 @@ def run_identify(set_id: str) -> None:
             audio = Path(tmp) / f"audio{Path(audio_key).suffix or '.mp3'}"
             download_to(audio_key, audio)
 
+            fmt = probe_format(audio)
+            if fmt not in ALLOWED_FORMATS:
+                raise ValueError(f"unsupported or unsafe container format: {fmt!r}")
+
             with SessionLocal() as db:
                 rec = db.get(SetRecord, set_id)
                 for i, seg in enumerate(rec.segments):
@@ -94,6 +117,7 @@ def run_identify(set_id: str) -> None:
                         seg.artist = None
                         seg.title = None
                         seg.match_confidence = 0.0
+                    rec.identify_started_at = time.time()  # heartbeat for staleness checks
                     db.commit()  # per-segment, so partial progress survives a crash
                 rec.identify_status = "done"
                 db.commit()
