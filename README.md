@@ -8,9 +8,25 @@ Upload a recorded DJ mix and get back its timeline: where each track starts and 
 
 ```
 web/        React + TypeScript + Vite frontend
-analysis/   (planned) Python DSP package: tempo, key, energy, transitions, fingerprinting
+analysis/   Python DSP package: tempo, key (Camelot), energy, transition detection
 api/        (planned) FastAPI app, RQ worker, Postgres schema
+data/       labeled evaluation sets: tracklists in labels/, audio in mixes/ (untracked)
 ```
+
+## Analysis
+
+```bash
+cd analysis
+python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/pytest                        # unit tests on synthetic audio
+.venv/bin/python scripts/evaluate_sets.py --manifest ../data/labels/sets.json --root ..
+.venv/bin/python scripts/tune_transitions.py --manifest ../data/labels/sets.json --root ..
+```
+
+Current transition-detection numbers on the two labeled sets (novelty kernel 128 s,
+prominence 0.15, tuned by the grid search): precision 0.48–0.56 and recall 0.60–0.62
+at ±30 s. One set's tracklist is minute-rounded and offset-corrected by +65 s
+(see `data/labels/sets.json` notes).
 
 ## Frontend
 

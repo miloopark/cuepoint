@@ -13,8 +13,14 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.signal import find_peaks
 
 BLOCK_S = 2.0
-KERNEL_S = 64.0
+# Tuned by scripts/tune_transitions.py against the two labeled sets (2026-11-15):
+# kernel 128 s / sigma 1 / prominence 0.15 → mean F1@±30s 0.38 vs 0.07 for the
+# original 64 s kernel + 3-sigma height threshold. DJ blends run 15-60 s, so the
+# checkerboard needs ~2 min of context on each side to see a boundary.
+KERNEL_S = 128.0
 MIN_SPACING_S = 90.0
+SIGMA = 1.0
+MIN_PROMINENCE = 0.15
 HOP = 512
 
 
@@ -26,7 +32,7 @@ class Transition:
     strength: float
 
 
-def _block_features(y: np.ndarray, sr: int, block_s: float) -> np.ndarray:
+def block_features(y: np.ndarray, sr: int, block_s: float = BLOCK_S) -> np.ndarray:
     mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=20, hop_length=HOP)
     chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=HOP)
     contrast = librosa.feature.spectral_contrast(y=y, sr=sr, hop_length=HOP)
@@ -41,13 +47,7 @@ def _block_features(y: np.ndarray, sr: int, block_s: float) -> np.ndarray:
     return blocks / (np.linalg.norm(blocks, axis=1, keepdims=True) + 1e-9)
 
 
-def novelty_curve(
-    y: np.ndarray,
-    sr: int,
-    block_s: float = BLOCK_S,
-    kernel_s: float = KERNEL_S,
-) -> tuple[np.ndarray, np.ndarray]:
-    blocks = _block_features(y, sr, block_s)
+def novelty_from_blocks(blocks: np.ndarray, block_s: float, kernel_s: float) -> np.ndarray:
     n = len(blocks)
     half = max(2, int(kernel_s / block_s / 2))
     novelty = np.zeros(n)
@@ -57,8 +57,54 @@ def novelty_curve(
         within = (before @ before.T).mean() + (after @ after.T).mean()
         across = (before @ after.T).mean()
         novelty[i] = within / 2.0 - across
-    times = (np.arange(n) + 0.5) * block_s
+    return novelty
+
+
+def novelty_curve(
+    y: np.ndarray,
+    sr: int,
+    block_s: float = BLOCK_S,
+    kernel_s: float = KERNEL_S,
+) -> tuple[np.ndarray, np.ndarray]:
+    blocks = block_features(y, sr, block_s)
+    novelty = novelty_from_blocks(blocks, block_s, kernel_s)
+    times = (np.arange(len(blocks)) + 0.5) * block_s
     return times, novelty
+
+
+def pick_peaks(
+    novelty: np.ndarray,
+    block_s: float = BLOCK_S,
+    sigma: float = SIGMA,
+    min_spacing_s: float = MIN_SPACING_S,
+    min_prominence: float = MIN_PROMINENCE,
+) -> list[Transition]:
+    if len(novelty) == 0:
+        return []
+    smooth = gaussian_filter1d(novelty, sigma=sigma)
+    peaks, props = find_peaks(
+        smooth, prominence=min_prominence, distance=max(1, int(min_spacing_s / block_s))
+    )
+    times = (np.arange(len(novelty)) + 0.5) * block_s
+
+    transitions = []
+    for p, prom in zip(peaks, props["prominences"]):
+        half_level = smooth[p] - prom / 2.0
+        lo = p
+        while lo > 0 and smooth[lo] > half_level:
+            lo -= 1
+        hi = p
+        while hi < len(smooth) - 1 and smooth[hi] > half_level:
+            hi += 1
+        transitions.append(
+            Transition(
+                start_s=float(times[lo]),
+                end_s=float(times[hi]),
+                peak_s=float(times[p]),
+                strength=float(prom),
+            )
+        )
+    return transitions
 
 
 def detect_transitions(
@@ -67,30 +113,8 @@ def detect_transitions(
     block_s: float = BLOCK_S,
     kernel_s: float = KERNEL_S,
     min_spacing_s: float = MIN_SPACING_S,
+    sigma: float = SIGMA,
+    min_prominence: float = MIN_PROMINENCE,
 ) -> list[Transition]:
-    times, novelty = novelty_curve(y, sr, block_s, kernel_s)
-    if len(novelty) == 0:
-        return []
-    smooth = gaussian_filter1d(novelty, sigma=2.0)
-
-    threshold = max(0.3, float(smooth.mean() + 3.0 * smooth.std()))
-    peaks, props = find_peaks(smooth, height=threshold, distance=max(1, int(min_spacing_s / block_s)))
-
-    transitions = []
-    for p, height in zip(peaks, props["peak_heights"]):
-        half_height = height / 2.0
-        lo = p
-        while lo > 0 and smooth[lo] > half_height:
-            lo -= 1
-        hi = p
-        while hi < len(smooth) - 1 and smooth[hi] > half_height:
-            hi += 1
-        transitions.append(
-            Transition(
-                start_s=float(times[lo]),
-                end_s=float(times[hi]),
-                peak_s=float(times[p]),
-                strength=float(height),
-            )
-        )
-    return transitions
+    _, novelty = novelty_curve(y, sr, block_s, kernel_s)
+    return pick_peaks(novelty, block_s, sigma, min_spacing_s, min_prominence)

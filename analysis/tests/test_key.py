@@ -10,7 +10,7 @@ def test_camelot_mapping():
 
 
 def test_a_minor_chord_detected_as_8a(a_minor_chord):
-    key, camelot, confidence = estimate_key(a_minor_chord, SR)
+    _key, camelot, confidence = estimate_key(a_minor_chord, SR)
     assert camelot == "8A"
     assert 0.0 < confidence <= 1.0
 
