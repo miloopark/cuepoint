@@ -288,7 +288,7 @@ def identify_set(set_id: str, req: EditRequest) -> dict:
         db.commit()
     try:
         enqueue_identify(set_id)
-    except Exception as e:  # noqa: BLE001 — any failure must revert the claim
+    except Exception as e:
         with SessionLocal() as db:
             rec = db.get(SetRecord, set_id)
             if rec is not None:
