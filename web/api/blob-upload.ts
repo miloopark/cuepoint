@@ -15,17 +15,27 @@ const AUDIO_TYPES = [
   'audio/aac',
 ];
 
+const AUDIO_EXT = /\.(mp3|wav|flac|aiff?|m4a|aac|ogg)$/i;
+
 export async function POST(request: Request): Promise<Response> {
   const body = (await request.json()) as HandleUploadBody;
   try {
     const result = await handleUpload({
       body,
       request,
-      onBeforeGenerateToken: async () => ({
-        allowedContentTypes: AUDIO_TYPES,
-        maximumSizeInBytes: 300 * 1024 * 1024,
-        addRandomSuffix: true,
-      }),
+      onBeforeGenerateToken: async (pathname) => {
+        // Flat, short, audio-extension filenames only — no nested paths or
+        // attacker-chosen directory structure in the store.
+        if (pathname.length > 120 || pathname.includes('/') || !AUDIO_EXT.test(pathname)) {
+          throw new Error('invalid audio filename');
+        }
+        return {
+          allowedContentTypes: AUDIO_TYPES,
+          maximumSizeInBytes: 300 * 1024 * 1024,
+          addRandomSuffix: true,
+          validUntil: Date.now() + 10 * 60 * 1000, // token usable for 10 min only
+        };
+      },
       onUploadCompleted: async () => {
         // Registration happens when the browser POSTs /sets with the blob URL.
       },
