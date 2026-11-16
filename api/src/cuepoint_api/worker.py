@@ -4,7 +4,6 @@ Run with:  rq worker --worker-class rq.SimpleWorker analysis
 (SimpleWorker: no fork per job — macOS + numpy/Accelerate deadlock under fork.)"""
 
 import tempfile
-import time
 import traceback
 from pathlib import Path
 
@@ -12,7 +11,7 @@ from cuepoint_analysis.pipeline import analyze_set
 
 from .config import settings
 from .db import SessionLocal, engine
-from .identify import ALLOWED_FORMATS, probe_format
+from .identify import ALLOWED_FORMATS, claim_identify, probe_format, release_failed_claim
 from .models import Base, SegmentRecord, SetRecord
 from .queueing import enqueue_identify, publish_progress
 from .storage import download_to, head_size
@@ -89,15 +88,21 @@ def run_analysis(set_id: str) -> None:
                 )
             db.commit()
         publish_progress(set_id, 1.0, "done")
-
-        # With a recognition token configured, new uploads name themselves:
-        # queue identification as soon as analysis lands.
-        if settings.audd_token:
-            _update_set(set_id, identify_status="running", identify_started_at=time.time())
-            enqueue_identify(set_id)
     except Exception:
         # Full traceback goes to the worker log only; API consumers get a generic message.
         print(f"[worker] analysis failed for set {set_id}\n{traceback.format_exc()}", flush=True)
         _update_set(set_id, status="failed", error="Analysis failed — the file may be corrupt or unsupported.")
         publish_progress(set_id, 1.0, "failed")
         raise
+
+    # With a recognition token configured, new uploads name themselves. Outside
+    # the analysis try/except: a queue hiccup here must never mark a finished
+    # analysis as failed — it only fails the identification claim.
+    if settings.audd_token:
+        claim_ts = claim_identify(set_id)
+        if claim_ts is not None:
+            try:
+                enqueue_identify(set_id)
+            except Exception as e:  # noqa: BLE001 — revert the claim on any failure
+                print(f"[worker] could not queue auto-identify for {set_id}: {e}", flush=True)
+                release_failed_claim(set_id, claim_ts)

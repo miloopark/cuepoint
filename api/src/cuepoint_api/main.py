@@ -5,7 +5,6 @@ import asyncio
 import json
 import re
 import secrets
-import time
 import uuid
 from contextlib import asynccontextmanager
 
@@ -17,13 +16,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from redis.exceptions import RedisError
-from sqlalchemy import or_ as sa_or
-from sqlalchemy import update as sa_update
 
 from .config import settings
 from .db import SessionLocal, engine
+from .identify import claim_identify, release_failed_claim
 from .models import Base, SetRecord
-from .queueing import IDENTIFY_JOB_TIMEOUT_S, enqueue_analysis, enqueue_identify, read_progress
+from .queueing import enqueue_analysis, enqueue_identify, read_progress
 from .storage import ensure_bucket, head_size, presign_get, presign_put
 
 
@@ -268,39 +266,15 @@ def identify_set(set_id: str, req: EditRequest) -> dict:
             raise HTTPException(status_code=403, detail="not allowed to edit this set")
         if rec.status != "done":
             raise HTTPException(status_code=409, detail="identify after analysis finishes")
-        # Atomic claim; strictly beyond the job timeout (worker heartbeats
-        # started_at while alive), a "running" is a dead worker — retryable.
-        stale_before = time.time() - 2 * IDENTIFY_JOB_TIMEOUT_S
-        claim_ts = time.time()
-        claimed = db.execute(
-            sa_update(SetRecord)
-            .where(SetRecord.id == set_id)
-            .where(
-                sa_or(
-                    SetRecord.identify_status.is_(None),
-                    SetRecord.identify_status != "running",
-                    SetRecord.identify_started_at < stale_before,
-                )
-            )
-            .values(identify_status="running", identify_started_at=claim_ts)
-        )
-        if claimed.rowcount == 0:
-            raise HTTPException(status_code=409, detail="identification already running")
-        db.commit()
+    # Shared atomic claim (same helper the worker's auto-identify uses); a
+    # "running" older than 2× the job timeout is a dead worker — retryable.
+    claim_ts = claim_identify(set_id)
+    if claim_ts is None:
+        raise HTTPException(status_code=409, detail="identification already running")
     try:
         enqueue_identify(set_id)
     except Exception as e:
-        with SessionLocal() as db:
-            # Conditional on still owning the exact claim made above, so a
-            # concurrent retry's newer claim is never clobbered.
-            db.execute(
-                sa_update(SetRecord)
-                .where(SetRecord.id == set_id)
-                .where(SetRecord.identify_status == "running")
-                .where(SetRecord.identify_started_at == claim_ts)
-                .values(identify_status="failed")
-            )
-            db.commit()
+        release_failed_claim(set_id, claim_ts)
         if isinstance(e, RedisError):
             raise HTTPException(status_code=503, detail="job queue unavailable")
         raise

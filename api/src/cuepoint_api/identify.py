@@ -14,10 +14,13 @@ import traceback
 from pathlib import Path
 
 import urllib3
+from sqlalchemy import or_ as sa_or
+from sqlalchemy import update as sa_update
 
 from .config import settings
 from .db import SessionLocal
 from .models import SetRecord
+from .queueing import IDENTIFY_JOB_TIMEOUT_S
 from .storage import download_to
 
 AUDD_URL = "https://api.audd.io/"
@@ -41,6 +44,42 @@ def probe_format(src: Path) -> str | None:
     if proc.returncode != 0:
         return None
     return proc.stdout.decode().strip() or None
+
+
+def claim_identify(set_id: str) -> float | None:
+    """Atomically claim the identification slot for a set. Returns the claim
+    timestamp, or None when a live run already holds it. Shared by the API
+    route and the worker's auto-identify so neither can bypass the other."""
+    stale_before = time.time() - 2 * IDENTIFY_JOB_TIMEOUT_S
+    claim_ts = time.time()
+    with SessionLocal() as db:
+        claimed = db.execute(
+            sa_update(SetRecord)
+            .where(SetRecord.id == set_id)
+            .where(
+                sa_or(
+                    SetRecord.identify_status.is_(None),
+                    SetRecord.identify_status != "running",
+                    SetRecord.identify_started_at < stale_before,
+                )
+            )
+            .values(identify_status="running", identify_started_at=claim_ts)
+        )
+        db.commit()
+        return claim_ts if claimed.rowcount == 1 else None
+
+
+def release_failed_claim(set_id: str, claim_ts: float) -> None:
+    """Revert a claim to 'failed' — only if we still own that exact claim."""
+    with SessionLocal() as db:
+        db.execute(
+            sa_update(SetRecord)
+            .where(SetRecord.id == set_id)
+            .where(SetRecord.identify_status == "running")
+            .where(SetRecord.identify_started_at == claim_ts)
+            .values(identify_status="failed")
+        )
+        db.commit()
 
 
 class AuddError(RuntimeError):
@@ -109,6 +148,7 @@ def run_identify(set_id: str) -> None:
                 raise ValueError(f"unsupported or unsafe container format: {fmt!r}")
 
             consecutive_api_errors = 0
+            total_api_errors = 0
             with SessionLocal() as db:
                 rec = db.get(SetRecord, set_id)
                 for i, seg in enumerate(rec.segments):
@@ -120,12 +160,14 @@ def run_identify(set_id: str) -> None:
                     try:
                         if _cut_clip(audio, mid, clip):
                             match = _recognize_clip(http, clip)
-                        consecutive_api_errors = 0
+                            # Reset only after an actual successful API response.
+                            consecutive_api_errors = 0
                     except AuddError as e:
                         # Leave the segment untouched; a dead token/quota must
                         # fail the job, not mislabel everything "unreleased".
                         consecutive_api_errors += 1
-                        if consecutive_api_errors >= 3:
+                        total_api_errors += 1
+                        if consecutive_api_errors >= 3 or total_api_errors >= 10:
                             raise ValueError(f"recognition API failing: {e}") from e
                         continue
                     if match is not None:
