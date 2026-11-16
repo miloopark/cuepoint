@@ -167,11 +167,16 @@ async def set_events(set_id: str) -> StreamingResponse:
             yield _BUSY_EVENT  # EventSource auto-reconnects after a pause
             return
         holds_per_set = False
+        holds_global = True
         try:
             # Check-and-increment with no await in between (asyncio won't preempt),
             # so concurrent connects can't race past the per-set cap.
             count = _sse_per_set.get(set_id, 0)
             if count >= _SSE_PER_SET_MAX:
+                # Let go of the global permit before the final write so a slow
+                # reader can't pin it.
+                _SSE_GLOBAL_SLOTS.release()
+                holds_global = False
                 yield _BUSY_EVENT
                 return
             _sse_per_set[set_id] = count + 1
@@ -186,7 +191,8 @@ async def set_events(set_id: str) -> StreamingResponse:
         finally:
             # One finally covers TimeoutError paths, client disconnect
             # (GeneratorExit), cancellation, and normal completion.
-            _SSE_GLOBAL_SLOTS.release()
+            if holds_global:
+                _SSE_GLOBAL_SLOTS.release()
             if holds_per_set:
                 _drop_per_set_count()
 
