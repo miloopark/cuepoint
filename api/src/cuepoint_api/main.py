@@ -159,20 +159,23 @@ async def set_events(set_id: str) -> StreamingResponse:
             _sse_per_set[set_id] = remaining
 
     async def stream():
-        # Check-and-increment with no await in between (asyncio won't preempt),
-        # so concurrent connects can't race past the per-set cap.
-        count = _sse_per_set.get(set_id, 0)
-        if count >= _SSE_PER_SET_MAX:
-            yield _BUSY_EVENT
-            return
-        _sse_per_set[set_id] = count + 1
+        # Global slot first, so a connection that is merely waiting holds no
+        # per-set budget.
         try:
             await asyncio.wait_for(_SSE_GLOBAL_SLOTS.acquire(), timeout=2.0)
         except TimeoutError:
-            _drop_per_set_count()
             yield _BUSY_EVENT  # EventSource auto-reconnects after a pause
             return
+        holds_per_set = False
         try:
+            # Check-and-increment with no await in between (asyncio won't preempt),
+            # so concurrent connects can't race past the per-set cap.
+            count = _sse_per_set.get(set_id, 0)
+            if count >= _SSE_PER_SET_MAX:
+                yield _BUSY_EVENT
+                return
+            _sse_per_set[set_id] = count + 1
+            holds_per_set = True
             # Short hold; longer jobs ride EventSource's automatic reconnect.
             for _ in range(180):
                 payload = await run_in_threadpool(_current_payload, set_id)
@@ -181,8 +184,11 @@ async def set_events(set_id: str) -> StreamingResponse:
                     return
                 await asyncio.sleep(1.0)
         finally:
+            # One finally covers TimeoutError paths, client disconnect
+            # (GeneratorExit), cancellation, and normal completion.
             _SSE_GLOBAL_SLOTS.release()
-            _drop_per_set_count()
+            if holds_per_set:
+                _drop_per_set_count()
 
     return StreamingResponse(
         stream(),
