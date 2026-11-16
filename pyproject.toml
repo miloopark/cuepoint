@@ -1,5 +1,22 @@
-# Vercel deployment config only — the installable packages live in analysis/
-# and api/ (see requirements.txt). This registers the queue subscribers.
+# Vercel deployment project: installs the local packages + queue SDK (via uv)
+# and registers the queue subscribers. Not an installable package itself.
+
+[project]
+name = "cuepoint-deploy"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "cuepoint-analysis",
+    "cuepoint-api",
+    "vercel-queue",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+cuepoint-analysis = { path = "analysis" }
+cuepoint-api = { path = "api" }
 
 [[tool.vercel.subscribers]]
 entrypoint = "queue_subscribers"
