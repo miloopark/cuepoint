@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from .config import settings
 from .db import SessionLocal, engine
 from .models import Base, SetRecord
-from .queueing import enqueue_analysis, read_progress
+from .queueing import enqueue_analysis, enqueue_identify, read_progress
 from .storage import ensure_bucket, head_size, presign_get, presign_put
 
 
@@ -69,6 +69,10 @@ class CreateSetRequest(BaseModel):
     audio_key: str
 
 
+class EditRequest(BaseModel):
+    edit_token: str = Field(min_length=1, max_length=64)
+
+
 class TracklistRequest(BaseModel):
     text: str = Field(min_length=1, max_length=50_000)
     offset_s: float = Field(default=0.0, ge=-7200, le=7200)
@@ -91,6 +95,7 @@ def _status_payload(rec: SetRecord) -> dict:
         "stage": rec.stage,
         "duration_s": rec.duration_s,
         "error": rec.error,
+        "identify_status": rec.identify_status,
         "created_at": rec.created_at.isoformat() if rec.created_at else None,
     }
     if rec.status == "processing":
@@ -248,6 +253,25 @@ def import_tracklist(set_id: str, req: TracklistRequest) -> dict:
         return {"named": named, "segments": [s.to_dict() for s in rec.segments]}
 
 
+@app.post("/sets/{set_id}/identify", status_code=202)
+def identify_set(set_id: str, req: EditRequest) -> dict:
+    """Queue a recognition pass over the set's segments (audd.io)."""
+    if not settings.audd_token:
+        raise HTTPException(status_code=503, detail="recognition not configured (CUEPOINT_AUDD_TOKEN)")
+    with SessionLocal() as db:
+        rec = _set_or_404(db, set_id)
+        if not secrets.compare_digest((rec.edit_token or "").encode(), req.edit_token.encode()):
+            raise HTTPException(status_code=403, detail="not allowed to edit this set")
+        if rec.status != "done":
+            raise HTTPException(status_code=409, detail="identify after analysis finishes")
+        if rec.identify_status == "running":
+            raise HTTPException(status_code=409, detail="identification already running")
+        rec.identify_status = "running"
+        db.commit()
+    enqueue_identify(set_id)
+    return {"identify_status": "running"}
+
+
 @app.get("/sets/{set_id}/analysis")
 def get_analysis(set_id: str) -> dict:
     with SessionLocal() as db:
@@ -258,6 +282,7 @@ def get_analysis(set_id: str) -> dict:
             "id": rec.id,
             "title": rec.title,
             "duration_s": rec.duration_s,
+            "identify_status": rec.identify_status,
             "segments": [s.to_dict() for s in rec.segments],
             "features": rec.result["features"],
             "transitions": rec.result["transitions"],

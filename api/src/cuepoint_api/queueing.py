@@ -21,6 +21,12 @@ def enqueue_analysis(set_id: str) -> None:
     )
 
 
+def enqueue_identify(set_id: str) -> None:
+    Queue(ANALYSIS_QUEUE, connection=get_redis()).enqueue(
+        "cuepoint_api.identify.run_identify", set_id, job_timeout=1800
+    )
+
+
 def _progress_key(set_id: str) -> str:
     return f"set:{set_id}:progress"
 

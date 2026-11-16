@@ -110,6 +110,38 @@ def test_create_set_returns_edit_token_but_reads_do_not(client):
     assert "edit_token" not in r2.json()
 
 
+def test_identify_requires_configured_token(client):
+    set_id = _make_done_set()
+    r = client.post(f"/sets/{set_id}/identify", json={"edit_token": "e" * 32})
+    assert r.status_code == 503  # CUEPOINT_AUDD_TOKEN unset in tests
+
+
+def test_identify_rejects_wrong_edit_token(client, monkeypatch):
+    from cuepoint_api.config import settings
+
+    monkeypatch.setattr(settings, "audd_token", "x" * 10)
+    set_id = _make_done_set()
+    r = client.post(f"/sets/{set_id}/identify", json={"edit_token": "wrong"})
+    assert r.status_code == 403
+
+
+def test_identify_enqueues_and_sets_status(client, monkeypatch):
+    from cuepoint_api import main
+    from cuepoint_api.config import settings
+
+    monkeypatch.setattr(settings, "audd_token", "x" * 10)
+    queued = []
+    monkeypatch.setattr(main, "enqueue_identify", queued.append)
+    set_id = _make_done_set()
+
+    r = client.post(f"/sets/{set_id}/identify", json={"edit_token": "e" * 32})
+    assert r.status_code == 202
+    assert queued == [set_id]
+    assert client.get(f"/sets/{set_id}").json()["identify_status"] == "running"
+    # A second request while running is rejected.
+    assert client.post(f"/sets/{set_id}/identify", json={"edit_token": "e" * 32}).status_code == 409
+
+
 def test_list_sets_includes_created(client):
     set_id = _make_done_set()
     r = client.get("/sets")

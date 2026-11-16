@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Nav } from '../components/Nav';
-import { audioUrl, editToken, getAnalysis, getWaveform, importTracklist, type ApiSegment } from '../lib/api';
+import {
+  audioUrl,
+  editToken,
+  getAnalysis,
+  getWaveform,
+  identifySet,
+  importTracklist,
+  type ApiSegment,
+} from '../lib/api';
 import {
   BLEND_HALF_MIN,
   MATCH_THRESHOLD,
@@ -33,6 +41,8 @@ interface SetView {
   wave: number[]; // 0–100, 240 bars
   isSample: boolean;
   audioSrc: string | null;
+  /** True once a recognition pass has run — unmatched segments then read "Unreleased ID". */
+  identified: boolean;
 }
 
 function resample(values: number[], n: number, reduce: (chunk: number[]) => number): number[] {
@@ -62,6 +72,7 @@ function sampleView(id: string): SetView {
     wave: sampleBars(240),
     isSample: true,
     audioSrc: null,
+    identified: true,
   };
 }
 
@@ -90,6 +101,7 @@ async function fetchView(id: string): Promise<SetView> {
     wave: resample(waveform.waveform, 240, (c) => Math.max(...c)),
     isSample: false,
     audioSrc: audioUrl(id),
+    identified: analysis.identify_status === 'done',
   };
 }
 
@@ -99,8 +111,10 @@ function keyTint(key: string): string {
   return `rgba(14, 14, 14, ${(0.06 + (n / 12) * 0.2).toFixed(3)})`;
 }
 
-function trackName(s: ViewSegment): string {
-  if (s.matchConfidence < MATCH_THRESHOLD) return 'Unidentified';
+function trackName(s: ViewSegment, identified: boolean): string {
+  // Before a recognition pass, unnamed means "not checked yet"; after one,
+  // it means the database doesn't know it — almost always an unreleased ID.
+  if (s.matchConfidence < MATCH_THRESHOLD) return identified ? 'Unreleased ID' : 'Unidentified';
   return `${s.artist ?? '[Artist]'} — ${s.title ?? '[Title]'}`;
 }
 
@@ -200,6 +214,7 @@ export function Analysis() {
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState('');
   const [importBusy, setImportBusy] = useState(false);
+  const [identifyBusy, setIdentifyBusy] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
@@ -291,6 +306,37 @@ export function Analysis() {
     }
   }
 
+  async function doIdentify() {
+    const token = editToken(id);
+    if (!token || identifyBusy) return;
+    setIdentifyBusy(true);
+    try {
+      await identifySet(id, token);
+      setToast('Identifying tracks — this takes a minute…');
+      // Poll until the recognition job finishes, then refresh the whole view.
+      for (let i = 0; i < 120; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const a = await getAnalysis(id);
+        if (a.identify_status !== 'running') {
+          setView((v) =>
+            v ? { ...v, segments: a.segments.map(apiSegToView), identified: a.identify_status === 'done' } : v,
+          );
+          const named = a.segments.filter((x) => (x.match_confidence ?? 0) >= 0.5).length;
+          setToast(
+            a.identify_status === 'done'
+              ? `Identified ${named} of ${a.segments.length} tracks — the rest are unreleased IDs`
+              : 'Identification failed — try again later',
+          );
+          break;
+        }
+      }
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : 'Identification failed');
+    } finally {
+      setIdentifyBusy(false);
+    }
+  }
+
   async function copy(text: string, message: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -344,7 +390,9 @@ export function Analysis() {
   const identified = segments.filter((x) => x.matchConfidence >= MATCH_THRESHOLD).length;
   const bpms = segments.map((x) => x.bpm).filter((b) => b > 0);
   const playheadMin = playing && currentMin !== null ? currentMin : s.startMin;
-  const tracklistText = segments.map((x) => `${formatTime(x.startMin)}  ${trackName(x)}`).join('\n');
+  const tracklistText = segments
+    .map((x) => `${formatTime(x.startMin)}  ${trackName(x, view.identified)}`)
+    .join('\n');
 
   return (
     <>
@@ -394,6 +442,11 @@ export function Analysis() {
                 </svg>
               )}
             </button>
+            {canEdit && (
+              <button type="button" className="btn" onClick={doIdentify} disabled={identifyBusy}>
+                {identifyBusy ? 'Identifying…' : 'Identify tracks'}
+              </button>
+            )}
             {canEdit && (
               <button type="button" className="btn" onClick={() => setImportOpen((o) => !o)}>
                 Import tracklist
@@ -637,7 +690,7 @@ export function Analysis() {
                 {formatTime(s.startMin)} – {formatTime(s.endMin)}
               </span>
             </div>
-            <p className="detail-name">{trackName(s)}</p>
+            <p className="detail-name">{trackName(s, view.identified)}</p>
             <div className="detail-key">
               <b>{s.camelotKey}</b>
               <span className="it">Camelot</span>
@@ -699,7 +752,7 @@ export function Analysis() {
                         </button>
                       </td>
                       <td className="mono muted">{formatTime(seg.startMin)}</td>
-                      <td style={{ fontWeight: 500 }}>{trackName(seg)}</td>
+                      <td style={{ fontWeight: 500 }}>{trackName(seg, view.identified)}</td>
                       <td className="mono">{seg.bpm || '—'}</td>
                       <td style={{ fontWeight: 700 }}>{seg.camelotKey}</td>
                       <td className={`mono ${matched ? '' : 'muted'}`}>

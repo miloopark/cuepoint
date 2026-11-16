@@ -30,6 +30,7 @@ export interface AnalysisData {
   id: string;
   title: string;
   duration_s: number;
+  identify_status: 'running' | 'done' | 'failed' | null;
   segments: ApiSegment[];
   features: {
     energy_times: number[];
@@ -121,6 +122,16 @@ export async function importTracklist(id: string, text: string, token: string) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text, edit_token: token }),
+    }),
+  );
+}
+
+export async function identifySet(id: string, token: string) {
+  return asJson<{ identify_status: string }>(
+    await fetch(`${API_URL}/sets/${id}/identify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ edit_token: token }),
     }),
   );
 }
