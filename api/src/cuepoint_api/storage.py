@@ -1,15 +1,26 @@
-"""S3-compatible object storage (SeaweedFS locally, R2 in production).
+"""Object storage, in two modes.
 
-The API never proxies audio bytes: the browser PUTs to a presigned URL and the
-worker downloads straight from storage."""
+- "s3": SeaweedFS locally (or any S3 endpoint) via boto3 with presigned URLs.
+- "blob": Vercel Blob public store — the browser uploads via the Blob client
+  SDK (token minted by the web project), and an audio key is the blob's full
+  public URL, fetched here with plain HTTPS.
+
+Either way the API never proxies audio bytes."""
 
 from pathlib import Path
 
 import boto3
+import urllib3
 from botocore.client import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from .config import settings
+
+_http = urllib3.PoolManager()
+
+
+def _blob_mode() -> bool:
+    return settings.storage_backend == "blob"
 
 
 def client():
@@ -24,6 +35,8 @@ def client():
 
 
 def ensure_bucket() -> None:
+    if _blob_mode():
+        return  # blob stores are provisioned, not created at runtime
     try:
         client().create_bucket(Bucket=settings.s3_bucket)
     except ClientError:
@@ -31,6 +44,8 @@ def ensure_bucket() -> None:
 
 
 def presign_put(key: str, content_type: str, expires_s: int = 3600) -> str:
+    if _blob_mode():
+        raise RuntimeError("blob mode: uploads go browser → Blob via the web project's token route")
     return client().generate_presigned_url(
         "put_object",
         Params={"Bucket": settings.s3_bucket, "Key": key, "ContentType": content_type},
@@ -39,6 +54,8 @@ def presign_put(key: str, content_type: str, expires_s: int = 3600) -> str:
 
 
 def presign_get(key: str, expires_s: int = 3600) -> str:
+    if _blob_mode():
+        return key  # the key IS the (unguessable) public blob URL
     return client().generate_presigned_url(
         "get_object",
         Params={"Bucket": settings.s3_bucket, "Key": key},
@@ -48,6 +65,15 @@ def presign_get(key: str, expires_s: int = 3600) -> str:
 
 def head_size(key: str) -> int | None:
     """Object size in bytes, or None if it doesn't exist."""
+    if _blob_mode():
+        try:
+            r = _http.request("HEAD", key, timeout=urllib3.Timeout(total=10))
+            if r.status != 200:
+                return None
+            length = r.headers.get("Content-Length")
+            return int(length) if length else None
+        except Exception:  # noqa: BLE001 — unreachable store reads as absent object
+            return None
     try:
         return int(client().head_object(Bucket=settings.s3_bucket, Key=key)["ContentLength"])
     except (ClientError, BotoCoreError):
@@ -55,4 +81,11 @@ def head_size(key: str) -> int | None:
 
 
 def download_to(key: str, path: str | Path) -> None:
+    if _blob_mode():
+        with _http.request("GET", key, preload_content=False, timeout=urllib3.Timeout(total=300)) as r:
+            if r.status != 200:
+                raise RuntimeError(f"blob fetch failed with status {r.status}")
+            with open(path, "wb") as f:
+                f.writelines(r.stream(1 << 20))
+        return
     client().download_file(settings.s3_bucket, key, str(path))

@@ -4,16 +4,23 @@ For each analyzed segment, clip ~12 s from its middle (where one track plays
 alone), send it to AudD, and write back artist/title. Segments the database
 doesn't know stay unnamed — the UI labels them "Unreleased ID" once a full
 identification pass has run. Tracklist-imported names (confidence 0.95) are
-never overwritten."""
+never overwritten.
 
+Clips are cut in pure Python (decode once with librosa, slice, write WAV) and
+the container gate is magic-byte sniffing — no ffmpeg/ffprobe subprocess, which
+both simplifies deployment (Vercel functions) and removes the external-parser
+attack surface."""
+
+import io
 import json
-import subprocess
 import tempfile
 import time
 import traceback
 from pathlib import Path
 
+import soundfile as sf
 import urllib3
+from cuepoint_analysis.audio import load_audio
 from sqlalchemy import or_ as sa_or
 from sqlalchemy import update as sa_update
 
@@ -27,23 +34,35 @@ AUDD_URL = "https://api.audd.io/"
 MATCH_CONFIDENCE = 0.85  # acoustic match, slightly below tracklist-import's 0.95
 CLIP_S = 12.0
 
-# ffprobe format_name values we accept. Anything else — hls, concat, image2 and
-# friends — is a container that can reference other files, not uploaded audio.
-ALLOWED_FORMATS = {"mp3", "wav", "flac", "aiff", "ogg", "aac", "mov,mp4,m4a,3gp,3g2,mj2"}
+# Container formats we accept, by magic bytes. Anything else — playlists,
+# concat lists, images — is not uploaded audio and never reaches a decoder.
+ALLOWED_FORMATS = {"mp3", "wav", "flac", "aiff", "m4a", "ogg", "aac"}
 
 
-def probe_format(src: Path) -> str | None:
-    proc = subprocess.run(
-        ["ffprobe", "-v", "error", "-protocol_whitelist", "file,crypto",
-         "-show_entries", "format=format_name",
-         "-of", "default=noprint_wrappers=1:nokey=1", str(src)],
-        capture_output=True,
-        timeout=30,
-        check=False,
-    )
-    if proc.returncode != 0:
+def probe_format(src) -> str | None:
+    """Identify the audio container by magic bytes (no external parser)."""
+    try:
+        with open(src, "rb") as f:
+            head = f.read(16)
+    except OSError:
         return None
-    return proc.stdout.decode().strip() or None
+    if len(head) < 4:
+        return None
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return "wav"
+    if head[:4] == b"fLaC":
+        return "flac"
+    if head[:4] == b"FORM" and head[8:12] in (b"AIFF", b"AIFC"):
+        return "aiff"
+    if head[:4] == b"OggS":
+        return "ogg"
+    if head[4:8] == b"ftyp":
+        return "m4a"
+    if head[:3] == b"ID3":
+        return "mp3"
+    if head[0] == 0xFF and (head[1] & 0xE0) == 0xE0:
+        return "mp3"  # MPEG audio frame sync (raw MP3 or ADTS AAC — both allowed)
+    return None
 
 
 def claim_identify(set_id: str) -> float | None:
@@ -101,12 +120,11 @@ def parse_audd_response(data: dict) -> tuple[str, str] | None:
     return artist or "Unknown artist", title or "Unknown title"
 
 
-def _recognize_clip(http: urllib3.PoolManager, clip_path: Path) -> tuple[str, str] | None:
-    body = clip_path.read_bytes()
+def _recognize_clip(http: urllib3.PoolManager, wav_bytes: bytes) -> tuple[str, str] | None:
     r = http.request(
         "POST",
         AUDD_URL,
-        fields={"api_token": settings.audd_token, "file": ("clip.mp3", body, "audio/mpeg")},
+        fields={"api_token": settings.audd_token, "file": ("clip.wav", wav_bytes, "audio/wav")},
         timeout=urllib3.Timeout(total=30),
     )
     data = json.loads(r.data)
@@ -115,19 +133,16 @@ def _recognize_clip(http: urllib3.PoolManager, clip_path: Path) -> tuple[str, st
     return parse_audd_response(data)
 
 
-def _cut_clip(src: Path, mid_s: float, out: Path) -> bool:
-    start = max(0.0, mid_s - CLIP_S / 2)
-    proc = subprocess.run(
-        # protocol_whitelist: a malicious "audio" file that is really a playlist
-        # (HLS/concat) must not make ffmpeg fetch URLs or read local paths.
-        ["ffmpeg", "-y", "-nostdin", "-v", "error", "-protocol_whitelist", "file,crypto",
-         "-ss", f"{start:.2f}", "-t", f"{CLIP_S:.0f}",
-         "-i", str(src), "-ac", "1", "-b:a", "128k", str(out)],
-        capture_output=True,
-        timeout=60,
-        check=False,  # a failed cut just means this segment is skipped
-    )
-    return proc.returncode == 0 and out.exists()
+def _wav_clip(y, sr: int, mid_s: float) -> bytes | None:
+    """CLIP_S seconds around mid_s as 16-bit WAV bytes, cut from the decoded signal."""
+    half = int(CLIP_S / 2 * sr)
+    mid = int(mid_s * sr)
+    seg = y[max(0, mid - half) : mid + half]
+    if len(seg) < sr:  # under a second of audio — nothing to recognize
+        return None
+    buf = io.BytesIO()
+    sf.write(buf, seg, sr, format="WAV", subtype="PCM_16")
+    return buf.getvalue()
 
 
 def run_identify(set_id: str) -> None:
@@ -147,19 +162,22 @@ def run_identify(set_id: str) -> None:
             if fmt not in ALLOWED_FORMATS:
                 raise ValueError(f"unsupported or unsafe container format: {fmt!r}")
 
+            # Decode once; clips are numpy slices written as WAV in memory.
+            y, sr = load_audio(audio)
+
             consecutive_api_errors = 0
             total_api_errors = 0
             with SessionLocal() as db:
                 rec = db.get(SetRecord, set_id)
-                for i, seg in enumerate(rec.segments):
+                for seg in rec.segments:
                     if seg.match_confidence is not None and seg.match_confidence >= 0.9:
                         continue  # named by tracklist import; keep it
-                    clip = Path(tmp) / f"seg{i}.mp3"
                     mid = (seg.start_s + seg.end_s) / 2
                     match = None
                     try:
-                        if _cut_clip(audio, mid, clip):
-                            match = _recognize_clip(http, clip)
+                        wav = _wav_clip(y, sr, mid)
+                        if wav is not None:
+                            match = _recognize_clip(http, wav)
                             # Reset only after an actual successful API response.
                             consecutive_api_errors = 0
                     except AuddError as e:

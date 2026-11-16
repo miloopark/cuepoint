@@ -1,0 +1,9 @@
+# Backend (Python) project bundle — keep audio, the web app, and local junk out.
+web/
+data/
+node_modules/
+.venv/
+**/.venv/
+**/__pycache__/
+.claude/
+docker-compose.yml

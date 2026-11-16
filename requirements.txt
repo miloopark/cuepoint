@@ -1,0 +1,4 @@
+# Vercel Python function build: install the local packages plus the queue SDK.
+./analysis
+./api
+vercel-queue

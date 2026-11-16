@@ -108,8 +108,19 @@ def _status_payload(rec: SetRecord) -> dict:
     return payload
 
 
+def _valid_audio_key(key: str) -> bool:
+    if settings.storage_backend == "blob":
+        # Blob mode: the key is the blob's full public URL under our store's
+        # base — anything else could point the worker at arbitrary hosts.
+        base = settings.blob_public_base.rstrip("/")
+        return bool(base) and key.startswith(base + "/") and len(key) <= 500 and "?" not in key
+    return bool(AUDIO_KEY_RE.fullmatch(key))
+
+
 @app.post("/uploads")
 def create_upload(req: UploadRequest) -> dict:
+    if settings.storage_backend == "blob":
+        raise HTTPException(status_code=501, detail="uploads go directly to blob storage")
     if req.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(status_code=400, detail="unsupported content type")
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", req.filename)[-80:] or "audio"
@@ -119,7 +130,7 @@ def create_upload(req: UploadRequest) -> dict:
 
 @app.post("/sets", status_code=201)
 def create_set(req: CreateSetRequest) -> dict:
-    if not AUDIO_KEY_RE.fullmatch(req.audio_key):
+    if not _valid_audio_key(req.audio_key):
         raise HTTPException(status_code=400, detail="invalid audio key")
     size = head_size(req.audio_key)
     if size is None:

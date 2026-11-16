@@ -83,6 +83,25 @@ export function uploadFile(url: string, file: File, onProgress: (pct: number) =>
   });
 }
 
+/** Upload audio and return the audio key to register. Two modes:
+ *  blob (deployed): browser → Vercel Blob via the web project's token route;
+ *  s3 (local): presigned PUT from the API. */
+export async function uploadAudio(file: File, onProgress: (pct: number) => void): Promise<string> {
+  if ((import.meta.env.VITE_UPLOAD_MODE as string | undefined) === 'blob') {
+    const { upload } = await import('@vercel/blob/client');
+    const blob = await upload(file.name, file, {
+      access: 'public',
+      handleUploadUrl: '/api/blob-upload',
+      contentType: file.type || 'audio/mpeg',
+      onUploadProgress: ({ percentage }) => onProgress(Math.round(percentage)),
+    });
+    return blob.url;
+  }
+  const { key, upload_url } = await requestUpload(file.name, file.type || 'audio/mpeg');
+  await uploadFile(upload_url, file, onProgress);
+  return key;
+}
+
 export async function createSet(title: string, audioKey: string) {
   const set = await asJson<SetStatus & { edit_token: string }>(
     await fetch(`${API_URL}/sets`, {

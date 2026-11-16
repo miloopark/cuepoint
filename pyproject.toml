@@ -1,0 +1,5 @@
+# Vercel deployment config only — the installable packages live in analysis/
+# and api/ (see requirements.txt). This registers the queue subscribers.
+
+[[tool.vercel.subscribers]]
+entrypoint = "queue_subscribers"

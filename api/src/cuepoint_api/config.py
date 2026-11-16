@@ -9,6 +9,14 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://cuepoint:cuepoint@localhost:5433/cuepoint"
     redis_url: str = "redis://localhost:6379/0"
 
+    # "rq" (local docker redis) or "vercel" (Vercel Queues push subscribers)
+    queue_backend: str = "rq"
+
+    # "s3" (local SeaweedFS / R2 via boto3) or "blob" (Vercel Blob public store)
+    storage_backend: str = "s3"
+    # Blob mode: the store's public base URL; audio keys are full blob URLs under it.
+    blob_public_base: str = ""
+
     s3_endpoint: str = "http://localhost:8333"
     s3_access_key: str = "cuepoint"
     s3_secret_key: str = "cuepoint123"

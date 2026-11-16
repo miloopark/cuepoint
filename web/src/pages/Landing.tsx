@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type DragEvent, type R
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Nav } from '../components/Nav';
 import { LogoMark } from '../components/Logo';
-import { createSet, requestUpload, uploadFile } from '../lib/api';
+import { createSet, uploadAudio } from '../lib/api';
 import { BLEND_HALF_MIN, SAMPLE_DURATION_MIN, pct, sampleBars, sampleCuts } from '../lib/sample';
 
 const MAX_BYTES = 200 * 1024 * 1024;
@@ -174,8 +174,7 @@ function Upload() {
     setError(null);
     setUploadPct(0);
     try {
-      const { key, upload_url } = await requestUpload(file.name, file.type || 'audio/mpeg');
-      await uploadFile(upload_url, file, setUploadPct);
+      const key = await uploadAudio(file, (pct) => setUploadPct(pct));
       const title = file.name.replace(/\.[^.]+$/, '');
       const set = await createSet(title, key);
       navigate('/processing', { state: { setId: set.id, fileName: file.name, size: file.size } });
