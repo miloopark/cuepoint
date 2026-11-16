@@ -151,16 +151,27 @@ async def set_events(set_id: str) -> StreamingResponse:
 
     await run_in_threadpool(check_exists)  # forged ids never hold stream resources
 
+    def _drop_per_set_count() -> None:
+        remaining = _sse_per_set.get(set_id, 1) - 1
+        if remaining <= 0:
+            _sse_per_set.pop(set_id, None)
+        else:
+            _sse_per_set[set_id] = remaining
+
     async def stream():
-        if _sse_per_set.get(set_id, 0) >= _SSE_PER_SET_MAX:
+        # Check-and-increment with no await in between (asyncio won't preempt),
+        # so concurrent connects can't race past the per-set cap.
+        count = _sse_per_set.get(set_id, 0)
+        if count >= _SSE_PER_SET_MAX:
             yield _BUSY_EVENT
             return
+        _sse_per_set[set_id] = count + 1
         try:
             await asyncio.wait_for(_SSE_GLOBAL_SLOTS.acquire(), timeout=2.0)
         except TimeoutError:
+            _drop_per_set_count()
             yield _BUSY_EVENT  # EventSource auto-reconnects after a pause
             return
-        _sse_per_set[set_id] = _sse_per_set.get(set_id, 0) + 1
         try:
             # Short hold; longer jobs ride EventSource's automatic reconnect.
             for _ in range(180):
@@ -171,11 +182,7 @@ async def set_events(set_id: str) -> StreamingResponse:
                 await asyncio.sleep(1.0)
         finally:
             _SSE_GLOBAL_SLOTS.release()
-            remaining = _sse_per_set.get(set_id, 1) - 1
-            if remaining <= 0:
-                _sse_per_set.pop(set_id, None)
-            else:
-                _sse_per_set[set_id] = remaining
+            _drop_per_set_count()
 
     return StreamingResponse(
         stream(),
