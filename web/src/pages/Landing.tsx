@@ -15,12 +15,16 @@ const DEMOS = [
   { id: 'demo-03', meta: '03 / [length] / [tracks]', title: '[Demo set title]' },
 ];
 
+// Measured 2026-11-16 by analysis/scripts/evaluate_sets.py against two labeled
+// live sets (crowd tracklists; Franky held out of tuning). Honest gaps stay
+// visible: tempo/key lack per-track export truth, so only synthetic audio
+// verifies them so far.
 const EVALUATION = [
-  { read: 'Transitions', metric: 'Recall within ±15 s', target: '≥ 80%', measured: '[—]' },
-  { read: 'Tempo', metric: 'Segments within ±2 BPM', target: '[—]', measured: '[—]' },
-  { read: 'Key', metric: 'Exact / Camelot-compatible', target: '[—]', measured: '[—]' },
-  { read: 'Identity', metric: 'Top-1 accuracy, 500+ track library', target: '≥ 70%', measured: '[—]' },
-  { read: 'Speed', metric: 'Processing time per hour of audio', target: '< 3 min', measured: '[—]' },
+  { read: 'Transitions', metric: 'Recall within ±15 s (±30 s)', target: '≥ 80%', measured: '40–54% (65–67%)' },
+  { read: 'Tempo', metric: 'Segments within ±2 BPM', target: '≥ 90%', measured: '100% synthetic · exports pending' },
+  { read: 'Key', metric: 'Exact / Camelot-compatible', target: '≥ 80%', measured: 'exact on synthetic · exports pending' },
+  { read: 'Identity', metric: 'Tracks named, commercial API (own engine pending)', target: '≥ 70%', measured: '73–79%' },
+  { read: 'Speed', metric: 'Processing time per hour of audio', target: '< 3 min', measured: '≈ 36 s' },
 ];
 
 const ARCH = [
@@ -379,8 +383,9 @@ function Evaluation() {
             Measured, <span className="it">honestly.</span>
           </h2>
           <p className="lede" style={{ maxWidth: 360 }}>
-            Scored against hand-labeled sets and DJ-software exports. Numbers update from the evaluation harness on
-            every merge.
+            Scored against two labeled live sets — one held out of tuning — with crowd-sourced tracklists as ground
+            truth. Tempo and key are verified on synthetic audio until DJ-software exports land. Last measured
+            Nov 16, 2026.
           </p>
         </div>
         <div className="split-main">
