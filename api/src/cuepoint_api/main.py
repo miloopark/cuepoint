@@ -16,6 +16,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from redis.exceptions import RedisError
 from sqlalchemy import or_ as sa_or
 from sqlalchemy import update as sa_update
 
@@ -287,7 +288,7 @@ def identify_set(set_id: str, req: EditRequest) -> dict:
         db.commit()
     try:
         enqueue_identify(set_id)
-    except Exception:
+    except RedisError:
         with SessionLocal() as db:
             rec = db.get(SetRecord, set_id)
             if rec is not None:
