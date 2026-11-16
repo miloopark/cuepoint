@@ -11,12 +11,11 @@ the container gate is magic-byte sniffing — no ffmpeg/ffprobe subprocess, whic
 both simplifies deployment (Vercel functions) and removes the external-parser
 attack surface."""
 
+import contextlib
 import io
 import json
-import tempfile
 import time
 import traceback
-from pathlib import Path
 
 import soundfile as sf
 import urllib3
@@ -28,7 +27,7 @@ from .config import settings
 from .db import SessionLocal
 from .models import SetRecord
 from .queueing import IDENTIFY_JOB_TIMEOUT_S
-from .storage import download_to
+from .storage import download_bytes
 
 AUDD_URL = "https://api.audd.io/"
 MATCH_CONFIDENCE = 0.85  # acoustic match, slightly below tracklist-import's 0.95
@@ -40,12 +39,16 @@ ALLOWED_FORMATS = {"mp3", "wav", "flac", "aiff", "m4a", "ogg", "aac"}
 
 
 def probe_format(src) -> str | None:
-    """Identify the audio container by magic bytes (no external parser)."""
-    try:
-        with open(src, "rb") as f:
-            head = f.read(16)
-    except OSError:
-        return None
+    """Identify the audio container by magic bytes (no external parser).
+    Accepts raw bytes or a filesystem path."""
+    if isinstance(src, (bytes, bytearray)):
+        head = bytes(src[:16])
+    else:
+        try:
+            with open(src, "rb") as f:
+                head = f.read(16)
+        except OSError:
+            return None
     if len(head) < 4:
         return None
     if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
@@ -154,16 +157,17 @@ def run_identify(set_id: str) -> None:
 
     try:
         http = urllib3.PoolManager()
-        with tempfile.TemporaryDirectory() as tmp:
-            audio = Path(tmp) / f"audio{Path(audio_key).suffix or '.mp3'}"
-            download_to(audio_key, audio)
+        with contextlib.nullcontext():
+            raw = download_bytes(audio_key)
 
-            fmt = probe_format(audio)
+            fmt = probe_format(raw)
             if fmt not in ALLOWED_FORMATS:
                 raise ValueError(f"unsupported or unsafe container format: {fmt!r}")
 
-            # Decode once; clips are numpy slices written as WAV in memory.
-            y, sr = load_audio(audio)
+            # Decode once (in memory — /tmp is full of runtime deps on Vercel);
+            # clips are numpy slices written as WAV in memory.
+            y, sr = load_audio(io.BytesIO(raw))
+            del raw
 
             consecutive_api_errors = 0
             total_api_errors = 0

@@ -3,6 +3,8 @@
 import librosa
 import numpy as np
 
+from .audio import fft_size, framewise
+
 HOP = 512
 
 
@@ -18,9 +20,19 @@ def _minmax(x: np.ndarray) -> np.ndarray:
 
 
 def energy_curve(y: np.ndarray, sr: int, hop_s: float = 5.0) -> tuple[np.ndarray, np.ndarray]:
-    rms = librosa.feature.rms(y=y, hop_length=HOP)[0]
-    centroid = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=HOP)[0]
-    onset = librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP)
+    n_fft = fft_size(sr)
+    rms = framewise(
+        lambda s, **kw: librosa.feature.rms(y=s, frame_length=n_fft, hop_length=HOP, **kw),
+        y, n_fft=n_fft, hop=HOP, sr=sr,
+    )[0]
+    centroid = framewise(
+        lambda s, **kw: librosa.feature.spectral_centroid(y=s, sr=sr, n_fft=n_fft, hop_length=HOP, **kw),
+        y, n_fft=n_fft, hop=HOP, sr=sr,
+    )[0]
+    onset = framewise(
+        lambda s, **kw: librosa.onset.onset_strength(y=s, sr=sr, n_fft=n_fft, hop_length=HOP, **kw),
+        y, n_fft=n_fft, hop=HOP, sr=sr,
+    )
 
     frames_per_block = int(hop_s * sr / HOP)
     n_blocks = min(len(rms), len(centroid), len(onset)) // frames_per_block

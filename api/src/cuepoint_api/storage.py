@@ -80,6 +80,21 @@ def head_size(key: str) -> int | None:
         return None
 
 
+def download_bytes(key: str) -> bytes:
+    """Fetch an object fully into memory — workers have no usable /tmp (the
+    Python runtime's dependencies fill it) but plenty of headroom for audio."""
+    if _blob_mode():
+        r = _http.request("GET", key, timeout=urllib3.Timeout(total=300))
+        if r.status != 200:
+            raise RuntimeError(f"blob fetch failed with status {r.status}")
+        return r.data
+    body = client().get_object(Bucket=settings.s3_bucket, Key=key)["Body"]
+    try:
+        return body.read()
+    finally:
+        body.close()
+
+
 def download_to(key: str, path: str | Path) -> None:
     if _blob_mode():
         with _http.request("GET", key, preload_content=False, timeout=urllib3.Timeout(total=300)) as r:

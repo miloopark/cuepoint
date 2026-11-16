@@ -38,6 +38,32 @@ def test_uniform_texture_yields_no_transitions():
     assert detect_transitions(y, SR) == []
 
 
+def test_features_work_at_reduced_rate():
+    # Long sets analyze at 11025 Hz; every feature extractor must survive the
+    # lower Nyquist (spectral_contrast's default bands exceed it).
+    import soxr
+
+    from cuepoint_analysis.energy import energy_curve
+    from cuepoint_analysis.key import key_over_time
+    from cuepoint_analysis.tempo import bpm_over_time
+
+    sr_low = 11025
+    y = soxr.resample(
+        np.concatenate([_texture("dark", 120.0), _texture("bright", 120.0)]), SR, sr_low
+    ).astype(np.float32)
+
+    transitions = detect_transitions(y, sr_low)
+    assert len(transitions) == 1
+    assert abs(transitions[0].peak_s - 120.0) <= 15.0
+
+    _, bpm = bpm_over_time(y, sr_low)
+    assert len(bpm) > 0
+    _, keys, _ = key_over_time(y, sr_low, win_s=30.0)
+    assert len(keys) > 0
+    _, energy = energy_curve(y, sr_low)
+    assert np.all((energy >= 0) & (energy <= 1))
+
+
 def test_pick_peaks_works_on_irregular_time_grid():
     # Blocks of alternating duration (like beat-sync blocks under tempo drift).
     dts = np.tile([6.0, 9.0], 50)

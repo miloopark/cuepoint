@@ -3,6 +3,8 @@
 import librosa
 import numpy as np
 
+from .audio import fft_size
+
 PITCHES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 _FLAT_TO_SHARP = {"Db": "C#", "Eb": "D#", "Gb": "F#", "Ab": "G#", "Bb": "A#"}
 
@@ -53,7 +55,7 @@ def key_over_time(
     One chroma_stft pass over the whole signal, averaged per window — chroma_cqt per
     window would take minutes on a multi-hour mix."""
     hop = 2048
-    chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=hop)
+    chroma = librosa.feature.chroma_stft(y=y, sr=sr, n_fft=fft_size(sr), hop_length=hop)
     win_f = max(1, int(win_s * sr / hop))
     n = chroma.shape[1] // win_f
     times, keys, confs = [], [], []

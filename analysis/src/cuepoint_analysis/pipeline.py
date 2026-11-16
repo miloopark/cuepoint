@@ -1,17 +1,22 @@
 """Full-mix analysis: one call that produces everything the API stores for a set."""
 
 from collections.abc import Callable
-from pathlib import Path
 
 import numpy as np
 
-from .audio import load_audio
+from .audio import TARGET_SR, load_audio, probe_duration
 from .energy import energy_curve
 from .key import key_over_time
 from .tempo import bpm_over_time
 from .transitions import Transition, detect_transitions
 
 ProgressFn = Callable[[float, str], None]
+
+# Sets longer than this analyze at half rate: the full-rate STFT matrices for a
+# multi-hour mix exceed a 2 GB worker. Boundaries, tempo, key and energy all
+# live well below the reduced 5.5 kHz Nyquist.
+LONG_SET_S = 45 * 60
+LONG_SET_SR = 11025
 
 # Boundaries weaker than this fraction of the median boundary strength are merge
 # candidates (dropped only when BPM and key agree on both sides).
@@ -112,12 +117,17 @@ def build_segments(
 
 
 def analyze_set(
-    path: str | Path,
+    path,
     progress: ProgressFn = lambda fraction, stage: None,
     n_waveform_bins: int = 1000,
 ) -> dict:
     progress(0.02, "decoding")
-    y, sr = load_audio(path)
+    try:
+        est_duration = probe_duration(path)
+    except Exception:  # noqa: BLE001 — header probe is best-effort
+        est_duration = 0.0
+    analysis_sr = LONG_SET_SR if est_duration > LONG_SET_S else TARGET_SR
+    y, sr = load_audio(path, sr=analysis_sr)
     duration_s = len(y) / sr
 
     progress(0.2, "estimating tempo")

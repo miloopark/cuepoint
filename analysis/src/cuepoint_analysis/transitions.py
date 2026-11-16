@@ -19,6 +19,8 @@ import numpy as np
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import find_peaks
 
+from .audio import fft_size, framewise
+
 BLOCK_S = 2.0
 # Tuned 2026-11-16 (train: Cloonee, holdout: Franky — see tune_transitions.py).
 # kernel 128 / sigma 2 / prominence 0.2 / key cue 0.25 improves BOTH sets over
@@ -46,10 +48,27 @@ class Transition:
 
 
 def _stack_features(y: np.ndarray, sr: int) -> np.ndarray:
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=20, hop_length=HOP)
-    chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=HOP)
-    contrast = librosa.feature.spectral_contrast(y=y, sr=sr, hop_length=HOP)
-    return np.vstack([mfcc, chroma, contrast])
+    n_fft = fft_size(sr)
+    # Octave bands must fit under Nyquist: fmin 200 Hz × 2^n_bands ≤ sr/2.
+    n_bands = min(6, int(np.log2(sr / 2 / 200.0)))
+    # framewise keeps STFT transients chunk-sized — a multi-hour mix would
+    # otherwise materialize gigabyte spectrogram buffers per feature.
+    mfcc = framewise(
+        lambda s, **kw: librosa.feature.mfcc(y=s, sr=sr, n_mfcc=20, n_fft=n_fft, hop_length=HOP, **kw),
+        y, n_fft=n_fft, hop=HOP, sr=sr,
+    )
+    chroma = framewise(
+        lambda s, **kw: librosa.feature.chroma_stft(y=s, sr=sr, n_fft=n_fft, hop_length=HOP, **kw),
+        y, n_fft=n_fft, hop=HOP, sr=sr,
+    )
+    contrast = framewise(
+        lambda s, **kw: librosa.feature.spectral_contrast(
+            y=s, sr=sr, n_fft=n_fft, hop_length=HOP, n_bands=n_bands, **kw
+        ),
+        y, n_fft=n_fft, hop=HOP, sr=sr,
+    )
+    n = min(mfcc.shape[1], chroma.shape[1], contrast.shape[1])
+    return np.vstack([mfcc[:, :n], chroma[:, :n], contrast[:, :n]])
 
 
 def _normalize_blocks(blocks: np.ndarray) -> np.ndarray:

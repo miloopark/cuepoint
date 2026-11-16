@@ -3,9 +3,8 @@
 Run with:  rq worker --worker-class rq.SimpleWorker analysis
 (SimpleWorker: no fork per job — macOS + numpy/Accelerate deadlock under fork.)"""
 
-import tempfile
+import io
 import traceback
-from pathlib import Path
 
 from cuepoint_analysis.pipeline import analyze_set
 
@@ -14,7 +13,7 @@ from .db import SessionLocal, engine
 from .identify import ALLOWED_FORMATS, claim_identify, probe_format, release_failed_claim
 from .models import Base, SegmentRecord, SetRecord
 from .queueing import enqueue_identify, publish_progress
-from .storage import download_to, head_size
+from .storage import download_bytes, head_size
 
 
 def _update_set(set_id: str, **fields) -> None:
@@ -45,22 +44,22 @@ def run_analysis(set_id: str) -> None:
         if size is None or size > settings.max_upload_mb * 1024 * 1024:
             raise ValueError(f"object missing or exceeds {settings.max_upload_mb} MB cap")
 
-        suffix = Path(audio_key).suffix or ".mp3"
-        with tempfile.TemporaryDirectory() as tmp:
-            local = Path(tmp) / f"audio{suffix}"
-            download_to(audio_key, local)
+        # In memory, not /tmp: on Vercel the runtime's own dependencies fill the
+        # /tmp disk, so there's no room for audio files there.
+        raw = download_bytes(audio_key)
 
-            # Same container gate as identification: decoders must never see a
-            # playlist/concat file that can reference other paths.
-            fmt = probe_format(local)
-            if fmt not in ALLOWED_FORMATS:
-                raise ValueError(f"unsupported or unsafe container format: {fmt!r}")
+        # Same container gate as identification: decoders must never see a
+        # playlist/concat file that can reference other paths.
+        fmt = probe_format(raw)
+        if fmt not in ALLOWED_FORMATS:
+            raise ValueError(f"unsupported or unsafe container format: {fmt!r}")
 
-            def progress(fraction: float, stage: str) -> None:
-                publish_progress(set_id, fraction, stage)
-                _update_set(set_id, progress=fraction, stage=stage)
+        def progress(fraction: float, stage: str) -> None:
+            publish_progress(set_id, fraction, stage)
+            _update_set(set_id, progress=fraction, stage=stage)
 
-            result = analyze_set(local, progress=progress)
+        result = analyze_set(io.BytesIO(raw), progress=progress)
+        del raw
 
         with SessionLocal() as db:
             rec = db.get(SetRecord, set_id)

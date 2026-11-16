@@ -4,6 +4,8 @@ import librosa
 import numpy as np
 from scipy.signal import medfilt
 
+from .audio import fft_size, framewise
+
 BPM_LO = 70.0
 BPM_HI = 180.0
 ONSET_HOP = 512
@@ -23,7 +25,11 @@ def bpm_over_time(
     hop_s: float = 10.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Tempo per sliding window. Returns (window-center times, folded + smoothed BPM)."""
-    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=ONSET_HOP)
+    n_fft = fft_size(sr)
+    onset_env = framewise(
+        lambda s, **kw: librosa.onset.onset_strength(y=s, sr=sr, n_fft=n_fft, hop_length=ONSET_HOP, **kw),
+        y, n_fft=n_fft, hop=ONSET_HOP, sr=sr,
+    )
     env_rate = sr / ONSET_HOP
     win_f = int(win_s * env_rate)
     hop_f = max(1, int(hop_s * env_rate))
