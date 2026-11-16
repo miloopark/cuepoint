@@ -7,6 +7,7 @@ import re
 import uuid
 from contextlib import asynccontextmanager
 
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,8 +26,9 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(engine)
     try:
         ensure_bucket()
-    except Exception:
-        pass  # storage may be down in tests; uploads will surface the error
+    except (ClientError, BotoCoreError) as e:
+        # Storage may be down (or absent in tests); uploads will surface the error.
+        print(f"[api] could not ensure bucket at startup: {e}", flush=True)
     yield
 
 

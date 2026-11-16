@@ -9,9 +9,9 @@ from pathlib import Path
 
 from cuepoint_analysis.pipeline import analyze_set
 
+from .config import settings
 from .db import SessionLocal, engine
 from .models import Base, SegmentRecord, SetRecord
-from .config import settings
 from .queueing import publish_progress
 from .storage import download_to, head_size
 
