@@ -12,10 +12,10 @@ from cuepoint_api.worker import run_analysis
 
 
 @subscribe(topic=ANALYSIS_TOPIC, retry_after=60, max_attempts=3)
-def handle_analysis(message: dict) -> None:
+def handle_analysis(message: dict[str, str]) -> None:
     run_analysis(message["set_id"])
 
 
 @subscribe(topic=IDENTIFY_TOPIC, retry_after=60, max_attempts=3)
-def handle_identify(message: dict) -> None:
+def handle_identify(message: dict[str, str]) -> None:
     run_identify(message["set_id"])
