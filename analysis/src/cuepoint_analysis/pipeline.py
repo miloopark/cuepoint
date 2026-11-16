@@ -17,6 +17,7 @@ ProgressFn = Callable[[float, str], None]
 # live well below the reduced 5.5 kHz Nyquist.
 LONG_SET_S = 45 * 60
 LONG_SET_SR = 11025
+MAX_SET_S = 4 * 3600
 
 # Boundaries weaker than this fraction of the median boundary strength are merge
 # candidates (dropped only when BPM and key agree on both sides).
@@ -124,11 +125,21 @@ def analyze_set(
     progress(0.02, "decoding")
     try:
         est_duration = probe_duration(path)
-    except Exception:  # noqa: BLE001 — header probe is best-effort
-        est_duration = 0.0
+    except Exception:  # noqa: BLE001 — unreadable header: assume long (fail closed)
+        est_duration = float("inf")
     analysis_sr = LONG_SET_SR if est_duration > LONG_SET_S else TARGET_SR
     y, sr = load_audio(path, sr=analysis_sr)
     duration_s = len(y) / sr
+    if duration_s > MAX_SET_S:
+        raise ValueError(f"audio exceeds the {MAX_SET_S / 3600:.0f} h limit")
+    if duration_s > LONG_SET_S and sr != LONG_SET_SR:
+        # The header understated the duration — don't trust it; downsample so
+        # the feature extractors stay within the long-set memory budget.
+        import soxr
+
+        y = soxr.resample(y, sr, LONG_SET_SR).astype(np.float32)
+        sr = LONG_SET_SR
+        duration_s = len(y) / sr
 
     progress(0.2, "estimating tempo")
     bpm_times, bpm_values = bpm_over_time(y, sr)

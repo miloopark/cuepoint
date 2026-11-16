@@ -6,10 +6,10 @@ doesn't know stay unnamed — the UI labels them "Unreleased ID" once a full
 identification pass has run. Tracklist-imported names (confidence 0.95) are
 never overwritten.
 
-Clips are cut in pure Python (decode once with librosa, slice, write WAV) and
-the container gate is magic-byte sniffing — no ffmpeg/ffprobe subprocess, which
-both simplifies deployment (Vercel functions) and removes the external-parser
-attack surface."""
+Clips are seek-read from the original file at native sample rate (fingerprinting
+needs full bandwidth) and the container gate is magic-byte sniffing — no
+ffmpeg/ffprobe subprocess, which both simplifies deployment (Vercel functions)
+and removes the external-parser attack surface."""
 
 import contextlib
 import io
@@ -19,7 +19,6 @@ import traceback
 
 import soundfile as sf
 import urllib3
-from cuepoint_analysis.audio import load_audio
 from sqlalchemy import or_ as sa_or
 from sqlalchemy import update as sa_update
 
@@ -27,7 +26,7 @@ from .config import settings
 from .db import SessionLocal
 from .models import SetRecord
 from .queueing import IDENTIFY_JOB_TIMEOUT_S
-from .storage import download_bytes
+from .storage import download_bytes, head_size
 
 AUDD_URL = "https://api.audd.io/"
 MATCH_CONFIDENCE = 0.85  # acoustic match, slightly below tracklist-import's 0.95
@@ -136,11 +135,18 @@ def _recognize_clip(http: urllib3.PoolManager, wav_bytes: bytes) -> tuple[str, s
     return parse_audd_response(data)
 
 
-def _wav_clip(y, sr: int, mid_s: float) -> bytes | None:
-    """CLIP_S seconds around mid_s as 16-bit WAV bytes, cut from the decoded signal."""
-    half = int(CLIP_S / 2 * sr)
-    mid = int(mid_s * sr)
-    seg = y[max(0, mid - half) : mid + half]
+def _wav_clip(raw: bytes, mid_s: float) -> bytes | None:
+    """CLIP_S seconds around mid_s as 16-bit WAV, seek-read from the original
+    file at native sample rate — fingerprinting needs full bandwidth, not the
+    reduced analysis rate."""
+    with sf.SoundFile(io.BytesIO(raw)) as f:
+        sr = f.samplerate
+        half = int(CLIP_S / 2 * sr)
+        start = max(0, int(mid_s * sr) - half)
+        if start >= f.frames:
+            return None
+        f.seek(start)
+        seg = f.read(min(2 * half, f.frames - start), dtype="float32", always_2d=True).mean(axis=1)
     if len(seg) < sr:  # under a second of audio — nothing to recognize
         return None
     buf = io.BytesIO()
@@ -158,16 +164,14 @@ def run_identify(set_id: str) -> None:
     try:
         http = urllib3.PoolManager()
         with contextlib.nullcontext():
+            size = head_size(audio_key)
+            if size is None or size > settings.max_upload_mb * 1024 * 1024:
+                raise ValueError(f"object missing or exceeds {settings.max_upload_mb} MB cap")
             raw = download_bytes(audio_key)
 
             fmt = probe_format(raw)
             if fmt not in ALLOWED_FORMATS:
                 raise ValueError(f"unsupported or unsafe container format: {fmt!r}")
-
-            # Decode once (in memory — /tmp is full of runtime deps on Vercel);
-            # clips are numpy slices written as WAV in memory.
-            y, sr = load_audio(io.BytesIO(raw))
-            del raw
 
             consecutive_api_errors = 0
             total_api_errors = 0
@@ -179,7 +183,7 @@ def run_identify(set_id: str) -> None:
                     mid = (seg.start_s + seg.end_s) / 2
                     match = None
                     try:
-                        wav = _wav_clip(y, sr, mid)
+                        wav = _wav_clip(raw, mid)
                         if wav is not None:
                             match = _recognize_clip(http, wav)
                             # Reset only after an actual successful API response.

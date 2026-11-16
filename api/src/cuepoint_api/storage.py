@@ -81,16 +81,29 @@ def head_size(key: str) -> int | None:
 
 
 def download_bytes(key: str) -> bytes:
-    """Fetch an object fully into memory — workers have no usable /tmp (the
-    Python runtime's dependencies fill it) but plenty of headroom for audio."""
+    """Fetch an object fully into memory with a hard byte budget — workers have
+    no usable /tmp (the runtime's dependencies fill it), and the cap holds even
+    if the object grew after the pre-download HEAD check."""
+    budget = settings.max_upload_mb * 1024 * 1024
+    out = bytearray()
     if _blob_mode():
-        r = _http.request("GET", key, timeout=urllib3.Timeout(total=300))
-        if r.status != 200:
-            raise RuntimeError(f"blob fetch failed with status {r.status}")
-        return r.data
+        with _http.request(
+            "GET", key, preload_content=False, timeout=urllib3.Timeout(total=300)
+        ) as r:
+            if r.status != 200:
+                raise RuntimeError(f"blob fetch failed with status {r.status}")
+            for chunk in r.stream(1 << 20):
+                out += chunk
+                if len(out) > budget:
+                    raise ValueError(f"object exceeds {settings.max_upload_mb} MB cap")
+        return bytes(out)
     body = client().get_object(Bucket=settings.s3_bucket, Key=key)["Body"]
     try:
-        return body.read()
+        while chunk := body.read(1 << 20):
+            out += chunk
+            if len(out) > budget:
+                raise ValueError(f"object exceeds {settings.max_upload_mb} MB cap")
+        return bytes(out)
     finally:
         body.close()
 
