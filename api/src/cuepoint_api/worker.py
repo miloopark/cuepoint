@@ -11,8 +11,9 @@ from cuepoint_analysis.pipeline import analyze_set
 
 from .db import SessionLocal, engine
 from .models import Base, SegmentRecord, SetRecord
+from .config import settings
 from .queueing import publish_progress
-from .storage import download_to
+from .storage import download_to, head_size
 
 
 def _update_set(set_id: str, **fields) -> None:
@@ -37,6 +38,12 @@ def run_analysis(set_id: str) -> None:
     publish_progress(set_id, 0.0, "downloading")
 
     try:
+        # Re-check size at download time: the presigned PUT URL stays valid after
+        # /sets accepts the key, so the create-time check alone can be raced.
+        size = head_size(audio_key)
+        if size is None or size > settings.max_upload_mb * 1024 * 1024:
+            raise ValueError(f"object missing or exceeds {settings.max_upload_mb} MB cap")
+
         suffix = Path(audio_key).suffix or ".mp3"
         with tempfile.TemporaryDirectory() as tmp:
             local = Path(tmp) / f"audio{suffix}"

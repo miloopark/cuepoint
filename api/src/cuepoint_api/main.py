@@ -1,13 +1,14 @@
 """Cuepoint API. The browser uploads audio straight to object storage via a
 presigned URL; this app only handles metadata, jobs, and results."""
 
+import asyncio
 import json
 import re
-import time
 import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -123,18 +124,23 @@ def get_set(set_id: str) -> dict:
         return _status_payload(_set_or_404(db, set_id))
 
 
+def _current_payload(set_id: str) -> dict:
+    with SessionLocal() as db:
+        rec = db.get(SetRecord, set_id)
+        return _status_payload(rec) if rec else {"status": "failed", "error": "not found"}
+
+
 @app.get("/sets/{set_id}/events")
-def set_events(set_id: str) -> StreamingResponse:
-    def stream():
-        # Bounded: a worst-case job is minutes, not hours; don't pin threads forever.
-        for _ in range(1800):
-            with SessionLocal() as db:
-                rec = db.get(SetRecord, set_id)
-                payload = _status_payload(rec) if rec else {"status": "failed", "error": "not found"}
+async def set_events(set_id: str) -> StreamingResponse:
+    async def stream():
+        # Async so each viewer costs a coroutine, not a threadpool thread; bounded to
+        # 10 min (a 90-min mix analyzes in under a minute).
+        for _ in range(600):
+            payload = await run_in_threadpool(_current_payload, set_id)
             yield f"data: {json.dumps(payload)}\n\n"
             if payload["status"] in ("done", "failed"):
                 return
-            time.sleep(1.0)
+            await asyncio.sleep(1.0)
 
     return StreamingResponse(
         stream(),
