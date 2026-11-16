@@ -54,6 +54,9 @@ class SegmentRecord(Base):
     key_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     track_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     match_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Naming can come from an imported tracklist today or fingerprinting (v2) later.
+    artist: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     set_: Mapped[SetRecord] = relationship(back_populates="segments")
 
@@ -68,4 +71,6 @@ class SegmentRecord(Base):
             "key_confidence": self.key_confidence,
             "track_id": self.track_id,
             "match_confidence": self.match_confidence,
+            "artist": self.artist,
+            "title": self.title,
         }

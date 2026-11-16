@@ -8,6 +8,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from botocore.exceptions import BotoCoreError, ClientError
+from cuepoint_analysis.labels import parse_tracklist
 from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
@@ -65,6 +66,11 @@ class UploadRequest(BaseModel):
 class CreateSetRequest(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     audio_key: str
+
+
+class TracklistRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=50_000)
+    offset_s: float = Field(default=0.0, ge=-7200, le=7200)
 
 
 def _set_or_404(db, set_id: str) -> SetRecord:
@@ -201,6 +207,37 @@ async def set_events(set_id: str) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/sets/{set_id}/tracklist")
+def import_tracklist(set_id: str, req: TracklistRequest) -> dict:
+    """Name segments from a pasted tracklist: each segment takes the entry whose
+    time interval contains the segment's midpoint."""
+    entries = parse_tracklist(req.text)
+    if not entries:
+        raise HTTPException(status_code=400, detail="no timestamped lines found in tracklist")
+    entries.sort(key=lambda e: e.start_s)
+
+    with SessionLocal() as db:
+        rec = _set_or_404(db, set_id)
+        if rec.status != "done":
+            raise HTTPException(status_code=409, detail="import after analysis finishes")
+        named = 0
+        for seg in rec.segments:
+            midpoint = (seg.start_s + seg.end_s) / 2 + req.offset_s
+            match = None
+            for i, e in enumerate(entries):
+                next_start = entries[i + 1].start_s if i + 1 < len(entries) else float("inf")
+                if e.start_s <= midpoint < next_start:
+                    match = e
+                    break
+            if match is not None:
+                seg.artist = match.artist or None
+                seg.title = match.title or None
+                seg.match_confidence = 0.95  # named by tracklist, not fingerprint
+                named += 1
+        db.commit()
+        return {"named": named, "segments": [s.to_dict() for s in rec.segments]}
 
 
 @app.get("/sets/{set_id}/analysis")

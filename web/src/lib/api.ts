@@ -22,6 +22,8 @@ export interface ApiSegment {
   key_confidence: number | null;
   track_id: number | null;
   match_confidence: number | null;
+  artist: string | null;
+  title: string | null;
 }
 
 export interface AnalysisData {
@@ -96,6 +98,16 @@ export async function getAnalysis(id: string) {
 
 export async function getWaveform(id: string) {
   return asJson<{ waveform: number[]; duration_s: number }>(await fetch(`${API_URL}/sets/${id}/waveform`));
+}
+
+export async function importTracklist(id: string, text: string) {
+  return asJson<{ named: number; segments: ApiSegment[] }>(
+    await fetch(`${API_URL}/sets/${id}/tracklist`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text }),
+    }),
+  );
 }
 
 export const eventsUrl = (id: string) => `${API_URL}/sets/${id}/events`;

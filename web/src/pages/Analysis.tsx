@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Nav } from '../components/Nav';
-import { audioUrl, getAnalysis, getWaveform } from '../lib/api';
+import { audioUrl, getAnalysis, getWaveform, importTracklist, type ApiSegment } from '../lib/api';
 import {
   BLEND_HALF_MIN,
   MATCH_THRESHOLD,
@@ -65,23 +65,27 @@ function sampleView(id: string): SetView {
   };
 }
 
+function apiSegToView(s: ApiSegment): ViewSegment {
+  return {
+    startMin: s.start_s / 60,
+    endMin: s.end_s / 60,
+    bpm: s.bpm ?? 0,
+    camelotKey: s.camelot_key ?? '—',
+    matchConfidence: s.match_confidence ?? 0,
+    artist: s.artist,
+    title: s.title,
+    blendStartMin: s.transition_start_s === null ? null : s.transition_start_s / 60,
+    blendEndMin: s.transition_end_s === null ? null : s.transition_end_s / 60,
+  };
+}
+
 async function fetchView(id: string): Promise<SetView> {
   const [analysis, waveform] = await Promise.all([getAnalysis(id), getWaveform(id)]);
   return {
     id,
     title: analysis.title,
     durationMin: analysis.duration_s / 60,
-    segments: analysis.segments.map((s) => ({
-      startMin: s.start_s / 60,
-      endMin: s.end_s / 60,
-      bpm: s.bpm ?? 0,
-      camelotKey: s.camelot_key ?? '—',
-      matchConfidence: s.match_confidence ?? 0,
-      artist: null,
-      title: null,
-      blendStartMin: s.transition_start_s === null ? null : s.transition_start_s / 60,
-      blendEndMin: s.transition_end_s === null ? null : s.transition_end_s / 60,
-    })),
+    segments: analysis.segments.map(apiSegToView),
     energy: resample(analysis.features.energy, 160, mean),
     wave: resample(waveform.waveform, 240, (c) => Math.max(...c)),
     isSample: false,
@@ -98,6 +102,82 @@ function keyTint(key: string): string {
 function trackName(s: ViewSegment): string {
   if (s.matchConfidence < MATCH_THRESHOLD) return 'Unidentified';
   return `${s.artist ?? '[Artist]'} — ${s.title ?? '[Title]'}`;
+}
+
+/** Camelot harmonic compatibility: same slot, same number (A↔B), or ±1 number same letter. */
+function keysCompatible(a: string, b: string): boolean {
+  const pa = /^(\d+)(A|B)$/.exec(a);
+  const pb = /^(\d+)(A|B)$/.exec(b);
+  if (!pa || !pb) return false;
+  const [na, la] = [parseInt(pa[1], 10), pa[2]];
+  const [nb, lb] = [parseInt(pb[1], 10), pb[2]];
+  if (na === nb) return true;
+  const step = Math.min((na - nb + 12) % 12, (nb - na + 12) % 12);
+  return step === 1 && la === lb;
+}
+
+interface TransitionInfo {
+  intoIndex: number; // segment index the transition leads into
+  atMin: number;
+  deltaPct: number; // energy after minus before, in points of the 0–100 scale
+  fromKey: string;
+  toKey: string;
+  compatible: boolean;
+  fromBpm: number;
+  toBpm: number;
+  meaning: string;
+}
+
+function describeTransition(t: Omit<TransitionInfo, 'meaning'>): string {
+  const d = t.deltaPct;
+  const energy =
+    d >= 8 ? `lifts the energy (+${Math.round(d)})` :
+    d >= 3 ? `builds (+${Math.round(d)})` :
+    d > -3 ? 'holds the energy steady' :
+    d > -8 ? `eases off (${Math.round(d)})` :
+    `cools the floor down (${Math.round(d)})`;
+  const key =
+    t.fromKey === t.toKey
+      ? `stays in ${t.toKey}`
+      : t.compatible
+        ? `moves ${t.fromKey} → ${t.toKey}, a compatible step on the wheel`
+        : `jumps ${t.fromKey} → ${t.toKey} — a key clash, often an acapella or FX moment`;
+  const bpmDiff = t.toBpm - t.fromBpm;
+  const bpm =
+    !t.fromBpm || !t.toBpm ? '' :
+    bpmDiff === 0 ? `tempo steady at ${t.toBpm}` :
+    `tempo ${bpmDiff > 0 ? 'up' : 'down'} ${t.fromBpm} → ${t.toBpm}`;
+  return [energy, key, bpm].filter(Boolean).join(' · ');
+}
+
+function computeTransitions(view: SetView): TransitionInfo[] {
+  const { segments, energy, durationMin } = view;
+  const at = (min: number) => {
+    const i = Math.round((min / durationMin) * (energy.length - 1));
+    return Math.max(0, Math.min(energy.length - 1, i));
+  };
+  const windowMean = (fromMin: number, toMin: number) => {
+    const [a, b] = [at(fromMin), at(toMin)];
+    const slice = energy.slice(Math.min(a, b), Math.max(a, b) + 1);
+    return slice.length ? slice.reduce((x, y) => x + y, 0) / slice.length : 0;
+  };
+  return segments.slice(1).map((seg, i) => {
+    const prev = segments[i];
+    const atMin = seg.startMin;
+    const before = windowMean(atMin - 1.2, atMin - 0.2);
+    const after = windowMean(atMin + 0.2, atMin + 1.2);
+    const base: Omit<TransitionInfo, 'meaning'> = {
+      intoIndex: i + 1,
+      atMin,
+      deltaPct: (after - before) * 100,
+      fromKey: prev.camelotKey,
+      toKey: seg.camelotKey,
+      compatible: keysCompatible(prev.camelotKey, seg.camelotKey),
+      fromBpm: prev.bpm,
+      toBpm: seg.bpm,
+    };
+    return { ...base, meaning: describeTransition(base) };
+  });
 }
 
 function keyPath(segments: ViewSegment[]): string {
@@ -117,6 +197,9 @@ export function Analysis() {
   const [toast, setToast] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [currentMin, setCurrentMin] = useState<number | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importBusy, setImportBusy] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
@@ -187,6 +270,23 @@ export function Analysis() {
       }),
     [view, s, D],
   );
+
+  const transitions = useMemo(() => (view ? computeTransitions(view) : []), [view]);
+
+  async function doImport() {
+    if (!importText.trim() || importBusy) return;
+    setImportBusy(true);
+    try {
+      const res = await importTracklist(id, importText);
+      setView((v) => (v ? { ...v, segments: res.segments.map(apiSegToView) } : v));
+      setToast(`Named ${res.named} of ${res.segments.length} tracks`);
+      setImportOpen(false);
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : 'Import failed');
+    } finally {
+      setImportBusy(false);
+    }
+  }
 
   async function copy(text: string, message: string) {
     try {
@@ -291,6 +391,11 @@ export function Analysis() {
                 </svg>
               )}
             </button>
+            {!view.isSample && (
+              <button type="button" className="btn" onClick={() => setImportOpen((o) => !o)}>
+                Import tracklist
+              </button>
+            )}
             <button type="button" className="btn" onClick={() => copy(tracklistText, 'Tracklist copied')}>
               Copy tracklist
             </button>
@@ -299,6 +404,30 @@ export function Analysis() {
             </button>
           </div>
         </div>
+
+        {importOpen && !view.isSample && (
+          <div className="import-panel">
+            <label className="mono-label muted" htmlFor="tracklist-text">
+              Paste a timestamped tracklist — “[0:04:30] Artist - Title” or “04:40 | Artist - Title”
+            </label>
+            <textarea
+              id="tracklist-text"
+              rows={6}
+              spellCheck={false}
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              placeholder={'[0:00:00] Artist - Opening Track\n[0:04:30] Artist - Next Track'}
+            />
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button type="button" className="btn btn-solid btn-sm" onClick={doImport} disabled={importBusy}>
+                {importBusy ? 'Importing…' : 'Name the tracks'}
+              </button>
+              <button type="button" className="btn btn-sm" onClick={() => setImportOpen(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         <dl className="stats">
           <div>
@@ -438,6 +567,62 @@ export function Analysis() {
             </div>
           </div>
         </section>
+
+        {transitions.length > 0 && (() => {
+          const maxDelta = Math.max(8, ...transitions.map((t) => Math.abs(t.deltaPct)));
+          const biggestUp = transitions.reduce((a, b) => (b.deltaPct > a.deltaPct ? b : a));
+          const biggestDown = transitions.reduce((a, b) => (b.deltaPct < a.deltaPct ? b : a));
+          const selT = sel > 0 && transitions[sel - 1] ? transitions[sel - 1] : biggestUp;
+          const builds = transitions.filter((t) => t.deltaPct >= 3).length;
+          const drops = transitions.filter((t) => t.deltaPct <= -3).length;
+          const holds = transitions.length - builds - drops;
+          return (
+            <section aria-label="Transition flow" className="transitions">
+              <div className="tr-head">
+                <span className="mono-label muted">Transition flow — energy change at each blend</span>
+                <span className="mono-label muted" aria-hidden="true">
+                  ▲ ink builds · <span className="tr-legend-drop">▼ red drops</span> · ◆ key clash
+                </span>
+              </div>
+              <div className="tr-chart" role="img" aria-label={`Energy change across ${transitions.length} transitions: ${builds} build, ${holds} hold, ${drops} drop`}>
+                <div aria-hidden="true" className="tr-zero" />
+                {transitions.map((t) => {
+                  const up = t.deltaPct >= 0;
+                  const h = Math.max(2, (Math.abs(t.deltaPct) / maxDelta) * 46);
+                  const extreme = t === biggestUp || t === biggestDown;
+                  return (
+                    <button
+                      key={t.intoIndex}
+                      type="button"
+                      className={`tr-bar ${up ? '' : 'is-down'} ${t.intoIndex === sel ? 'is-on' : ''}`}
+                      style={{ left: `${pctD(t.atMin)}%`, height: `${h}%`, [up ? 'bottom' : 'top']: '50%' }}
+                      title={`${formatTime(t.atMin)} — ${t.meaning}`}
+                      aria-label={`Transition into track ${t.intoIndex + 1} at ${formatTime(t.atMin)}: ${t.meaning}`}
+                      onClick={() => setSel(t.intoIndex)}
+                    >
+                      {!t.compatible && <span aria-hidden="true" className="tr-clash">◆</span>}
+                      {extreme && (
+                        <span aria-hidden="true" className="tr-extreme">
+                          {t.deltaPct > 0 ? '+' : ''}
+                          {Math.round(t.deltaPct)}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="tr-foot">
+                <p className="tr-meaning">
+                  <b className="mono">{String(selT.intoIndex).padStart(2, '0')} → {String(selT.intoIndex + 1).padStart(2, '0')}</b>{' '}
+                  at {formatTime(selT.atMin)} — {selT.meaning}.
+                </p>
+                <span className="mono-label muted">
+                  {builds} build · {holds} hold · {drops} drop
+                </span>
+              </div>
+            </section>
+          );
+        })()}
 
         <div className="detail-row">
           <aside aria-label="Selected track" className="detail">

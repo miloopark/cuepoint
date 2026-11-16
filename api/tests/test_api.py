@@ -70,6 +70,29 @@ def test_analysis_and_waveform_when_done(client):
     assert r2.json()["waveform"] == [10, 50, 100]
 
 
+def test_import_tracklist_names_segments(client):
+    set_id = _make_done_set()
+
+    text = "[0:00:00] First Artist - Opener\n[0:01:00] Second Artist - Closer\n"
+    r = client.post(f"/sets/{set_id}/tracklist", json={"text": text})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["named"] == 1
+    # The lone 0-120s segment's midpoint (60s) falls in the second entry's interval.
+    assert body["segments"][0]["artist"] == "Second Artist"
+    assert body["segments"][0]["title"] == "Closer"
+    assert body["segments"][0]["match_confidence"] == 0.95
+
+    analysis = client.get(f"/sets/{set_id}/analysis").json()
+    assert analysis["segments"][0]["artist"] == "Second Artist"
+
+
+def test_import_tracklist_rejects_unparseable_text(client):
+    set_id = _make_done_set()
+    r = client.post(f"/sets/{set_id}/tracklist", json={"text": "no timestamps here"})
+    assert r.status_code == 400
+
+
 def test_list_sets_includes_created(client):
     set_id = _make_done_set()
     r = client.get("/sets")
