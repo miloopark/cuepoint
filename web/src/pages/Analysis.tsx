@@ -310,9 +310,12 @@ export function Analysis() {
     () =>
       (view?.wave ?? []).map((_, i, arr) => {
         const m = (i / (arr.length - 1)) * D;
+        // Once playback has a position, the accent is a progress fill that
+        // follows it; before that, it previews the selected track.
+        if (currentMin !== null) return m <= currentMin ? 'var(--accent)' : 'var(--ink)';
         return s && m >= s.startMin && m < s.endMin ? 'var(--accent)' : 'var(--ink)';
       }),
-    [view, s, D],
+    [view, s, D, currentMin],
   );
 
   const transitions = useMemo(() => (view ? computeTransitions(view) : []), [view]);
@@ -424,7 +427,9 @@ export function Analysis() {
   const ok = s.matchConfidence >= MATCH_THRESHOLD;
   const identified = segments.filter((x) => x.matchConfidence >= MATCH_THRESHOLD).length;
   const bpms = segments.map((x) => x.bpm).filter((b) => b > 0);
-  const playheadMin = playing && currentMin !== null ? currentMin : s.startMin;
+  // The playhead holds the audio position even while paused; it only previews
+  // the selected track before playback has ever started.
+  const playheadMin = currentMin !== null ? currentMin : s.startMin;
   const playingSeg = segments.find((g) => playheadMin >= g.startMin && playheadMin < g.endMin) ?? s;
   const liveBpm = playingSeg.bpm || 0;
   const tracklistText = segments
@@ -795,7 +800,7 @@ export function Analysis() {
                     </span>
                   </>
                 )}
-                {playing && (
+                {currentMin !== null && (
                   <div aria-hidden="true" className="playhead" style={{ top: 0, bottom: 0, left: `${pctD(playheadMin)}%` }} />
                 )}
               </div>
