@@ -36,6 +36,8 @@ class SetRecord(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # null = never run, else running|done|failed
     identify_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # epoch seconds; lets a stale "running" (dead worker) be retried
+    identify_started_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime, default=lambda: dt.datetime.now(dt.UTC)

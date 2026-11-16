@@ -5,8 +5,12 @@ import asyncio
 import json
 import re
 import secrets
+import time
 import uuid
 from contextlib import asynccontextmanager
+
+from sqlalchemy import or_ as sa_or
+from sqlalchemy import update as sa_update
 
 from botocore.exceptions import BotoCoreError, ClientError
 from cuepoint_analysis.labels import parse_tracklist
@@ -264,11 +268,33 @@ def identify_set(set_id: str, req: EditRequest) -> dict:
             raise HTTPException(status_code=403, detail="not allowed to edit this set")
         if rec.status != "done":
             raise HTTPException(status_code=409, detail="identify after analysis finishes")
-        if rec.identify_status == "running":
+        # Atomic claim; a "running" older than the job timeout is a dead worker
+        # and may be retried.
+        stale_before = time.time() - 1800
+        claimed = db.execute(
+            sa_update(SetRecord)
+            .where(SetRecord.id == set_id)
+            .where(
+                sa_or(
+                    SetRecord.identify_status.is_(None),
+                    SetRecord.identify_status != "running",
+                    SetRecord.identify_started_at < stale_before,
+                )
+            )
+            .values(identify_status="running", identify_started_at=time.time())
+        )
+        if claimed.rowcount == 0:
             raise HTTPException(status_code=409, detail="identification already running")
-        rec.identify_status = "running"
         db.commit()
-    enqueue_identify(set_id)
+    try:
+        enqueue_identify(set_id)
+    except Exception:
+        with SessionLocal() as db:
+            rec = db.get(SetRecord, set_id)
+            if rec is not None:
+                rec.identify_status = "failed"
+                db.commit()
+        raise HTTPException(status_code=503, detail="job queue unavailable")
     return {"identify_status": "running"}
 
 

@@ -141,6 +141,13 @@ def test_identify_enqueues_and_sets_status(client, monkeypatch):
     # A second request while running is rejected.
     assert client.post(f"/sets/{set_id}/identify", json={"edit_token": "e" * 32}).status_code == 409
 
+    # ...but a stale "running" (dead worker) can be retried.
+    with SessionLocal() as db:
+        rec = db.get(SetRecord, set_id)
+        rec.identify_started_at = 1.0  # epoch 1970 — long past the timeout
+        db.commit()
+    assert client.post(f"/sets/{set_id}/identify", json={"edit_token": "e" * 32}).status_code == 202
+
 
 def test_list_sets_includes_created(client):
     set_id = _make_done_set()

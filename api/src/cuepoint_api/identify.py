@@ -52,7 +52,10 @@ def _recognize_clip(http: urllib3.PoolManager, clip_path: Path) -> tuple[str, st
 def _cut_clip(src: Path, mid_s: float, out: Path) -> bool:
     start = max(0.0, mid_s - CLIP_S / 2)
     proc = subprocess.run(
-        ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{CLIP_S:.0f}",
+        # protocol_whitelist: a malicious "audio" file that is really a playlist
+        # (HLS/concat) must not make ffmpeg fetch URLs or read local paths.
+        ["ffmpeg", "-y", "-nostdin", "-v", "error", "-protocol_whitelist", "file,crypto",
+         "-ss", f"{start:.2f}", "-t", f"{CLIP_S:.0f}",
          "-i", str(src), "-ac", "1", "-b:a", "128k", str(out)],
         capture_output=True,
         timeout=60,
