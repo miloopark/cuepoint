@@ -794,10 +794,17 @@ export function Analysis() {
               </div>
               <div className="tk-keys" aria-label="Key per 30 second window">
                 {view.keySeries.times.map((t, i) => {
-                  const k = view.keySeries.keys[i];
+                  const ks = view.keySeries.keys;
+                  const k = ks[i];
                   const conf = view.keySeries.confs[i];
+                  // Only flag sustained clashes (the new key holds for the next
+                  // window too) — single-window flickers are detector noise.
                   const clash =
-                    i > 0 && k !== view.keySeries.keys[i - 1] && !keysCompatible(view.keySeries.keys[i - 1], k);
+                    i > 0 &&
+                    k !== ks[i - 1] &&
+                    !keysCompatible(ks[i - 1], k) &&
+                    (i + 1 >= ks.length || ks[i + 1] === k);
+                  const n = (parseInt(k, 10) || 0) % 12;
                   return (
                     <span
                       key={i}
@@ -806,8 +813,8 @@ export function Analysis() {
                       style={{
                         left: `${pctD((t - keyW / 2) / 60)}%`,
                         width: `${pctD(keyW / 60)}%`,
-                        background: keyTint(k),
-                        opacity: 0.45 + 0.55 * conf,
+                        background: `rgba(14, 14, 14, ${(0.12 + (n / 12) * 0.55).toFixed(3)})`,
+                        opacity: 0.6 + 0.4 * conf,
                       }}
                     />
                   );
