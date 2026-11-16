@@ -271,6 +271,7 @@ def identify_set(set_id: str, req: EditRequest) -> dict:
         # Atomic claim; strictly beyond the job timeout (worker heartbeats
         # started_at while alive), a "running" is a dead worker — retryable.
         stale_before = time.time() - 2 * IDENTIFY_JOB_TIMEOUT_S
+        claim_ts = time.time()
         claimed = db.execute(
             sa_update(SetRecord)
             .where(SetRecord.id == set_id)
@@ -281,7 +282,7 @@ def identify_set(set_id: str, req: EditRequest) -> dict:
                     SetRecord.identify_started_at < stale_before,
                 )
             )
-            .values(identify_status="running", identify_started_at=time.time())
+            .values(identify_status="running", identify_started_at=claim_ts)
         )
         if claimed.rowcount == 0:
             raise HTTPException(status_code=409, detail="identification already running")
@@ -290,10 +291,16 @@ def identify_set(set_id: str, req: EditRequest) -> dict:
         enqueue_identify(set_id)
     except Exception as e:
         with SessionLocal() as db:
-            rec = db.get(SetRecord, set_id)
-            if rec is not None:
-                rec.identify_status = "failed"
-                db.commit()
+            # Conditional on still owning the exact claim made above, so a
+            # concurrent retry's newer claim is never clobbered.
+            db.execute(
+                sa_update(SetRecord)
+                .where(SetRecord.id == set_id)
+                .where(SetRecord.identify_status == "running")
+                .where(SetRecord.identify_started_at == claim_ts)
+                .values(identify_status="failed")
+            )
+            db.commit()
         if isinstance(e, RedisError):
             raise HTTPException(status_code=503, detail="job queue unavailable")
         raise

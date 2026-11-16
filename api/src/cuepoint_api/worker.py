@@ -11,6 +11,7 @@ from cuepoint_analysis.pipeline import analyze_set
 
 from .config import settings
 from .db import SessionLocal, engine
+from .identify import ALLOWED_FORMATS, probe_format
 from .models import Base, SegmentRecord, SetRecord
 from .queueing import publish_progress
 from .storage import download_to, head_size
@@ -48,6 +49,12 @@ def run_analysis(set_id: str) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             local = Path(tmp) / f"audio{suffix}"
             download_to(audio_key, local)
+
+            # Same container gate as identification: decoders must never see a
+            # playlist/concat file that can reference other paths.
+            fmt = probe_format(local)
+            if fmt not in ALLOWED_FORMATS:
+                raise ValueError(f"unsupported or unsafe container format: {fmt!r}")
 
             def progress(fraction: float, stage: str) -> None:
                 publish_progress(set_id, fraction, stage)
