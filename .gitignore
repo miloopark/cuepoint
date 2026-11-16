@@ -9,3 +9,5 @@ __pycache__/
 .venv/
 *.tsbuildinfo
 data/mixes/
+.vercel
+.env*

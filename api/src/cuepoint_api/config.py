@@ -1,12 +1,17 @@
 """Settings from environment (CUEPOINT_*), with local docker-compose defaults."""
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CUEPOINT_", env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+psycopg://cuepoint:cuepoint@localhost:5433/cuepoint"
+    # CUEPOINT_DATABASE_URL locally; DATABASE_URL as injected by Neon on Vercel.
+    database_url: str = Field(
+        default="postgresql+psycopg://cuepoint:cuepoint@localhost:5433/cuepoint",
+        validation_alias=AliasChoices("CUEPOINT_DATABASE_URL", "DATABASE_URL"),
+    )
     redis_url: str = "redis://localhost:6379/0"
 
     # "rq" (local docker redis) or "vercel" (Vercel Queues push subscribers)
