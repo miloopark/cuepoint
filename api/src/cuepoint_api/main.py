@@ -4,6 +4,7 @@ presigned URL; this app only handles metadata, jobs, and results."""
 import asyncio
 import json
 import re
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 
@@ -71,6 +72,7 @@ class CreateSetRequest(BaseModel):
 class TracklistRequest(BaseModel):
     text: str = Field(min_length=1, max_length=50_000)
     offset_s: float = Field(default=0.0, ge=-7200, le=7200)
+    edit_token: str = Field(min_length=1, max_length=64)
 
 
 def _set_or_404(db, set_id: str) -> SetRecord:
@@ -122,6 +124,8 @@ def create_set(req: CreateSetRequest) -> dict:
         db.add(rec)
         db.commit()
         payload = _status_payload(rec)
+        # Returned only here, never on later reads: it's the uploader's edit capability.
+        payload["edit_token"] = rec.edit_token
     enqueue_analysis(rec.id)
     return payload
 
@@ -220,6 +224,8 @@ def import_tracklist(set_id: str, req: TracklistRequest) -> dict:
 
     with SessionLocal() as db:
         rec = _set_or_404(db, set_id)
+        if not secrets.compare_digest(rec.edit_token or "", req.edit_token):
+            raise HTTPException(status_code=403, detail="not allowed to edit this set")
         if rec.status != "done":
             raise HTTPException(status_code=409, detail="import after analysis finishes")
         named = 0

@@ -7,6 +7,7 @@ def _make_done_set(result: dict | None = None) -> str:
         rec = SetRecord(
             title="Test Set",
             audio_key="uploads/x/test.mp3",
+            edit_token="e" * 32,
             status="done",
             progress=1.0,
             duration_s=120.0,
@@ -74,7 +75,7 @@ def test_import_tracklist_names_segments(client):
     set_id = _make_done_set()
 
     text = "[0:00:00] First Artist - Opener\n[0:01:00] Second Artist - Closer\n"
-    r = client.post(f"/sets/{set_id}/tracklist", json={"text": text})
+    r = client.post(f"/sets/{set_id}/tracklist", json={"text": text, "edit_token": "e" * 32})
     assert r.status_code == 200
     body = r.json()
     assert body["named"] == 1
@@ -89,8 +90,24 @@ def test_import_tracklist_names_segments(client):
 
 def test_import_tracklist_rejects_unparseable_text(client):
     set_id = _make_done_set()
-    r = client.post(f"/sets/{set_id}/tracklist", json={"text": "no timestamps here"})
+    r = client.post(f"/sets/{set_id}/tracklist", json={"text": "no timestamps here", "edit_token": "e" * 32})
     assert r.status_code == 400
+
+
+def test_import_tracklist_rejects_wrong_edit_token(client):
+    set_id = _make_done_set()
+    r = client.post(
+        f"/sets/{set_id}/tracklist",
+        json={"text": "[0:00:00] A - B", "edit_token": "wrong"},
+    )
+    assert r.status_code == 403
+
+
+def test_create_set_returns_edit_token_but_reads_do_not(client):
+    r = client.post("/sets", json={"title": "Tok", "audio_key": "uploads/" + "a" * 32 + "/mix.mp3"})
+    assert len(r.json()["edit_token"]) == 32
+    r2 = client.get(f"/sets/{r.json()['id']}")
+    assert "edit_token" not in r2.json()
 
 
 def test_list_sets_includes_created(client):

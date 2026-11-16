@@ -5,6 +5,7 @@ Features/waveform/transitions live in a JSON blob on the set row to start (the p
 fingerprinter address them individually."""
 
 import datetime as dt
+import secrets
 import uuid
 
 from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text
@@ -23,6 +24,9 @@ class SetRecord(Base):
     __tablename__ = "sets"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
+    # Capability token for mutations (e.g. tracklist import): returned once at
+    # creation to the uploader; share links carry only the set id.
+    edit_token: Mapped[str] = mapped_column(String(64), default=lambda: secrets.token_hex(16))
     title: Mapped[str] = mapped_column(String(300))
     audio_key: Mapped[str] = mapped_column(String(500))
     duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)

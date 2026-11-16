@@ -83,13 +83,28 @@ export function uploadFile(url: string, file: File, onProgress: (pct: number) =>
 }
 
 export async function createSet(title: string, audioKey: string) {
-  return asJson<SetStatus>(
+  const set = await asJson<SetStatus & { edit_token: string }>(
     await fetch(`${API_URL}/sets`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title, audio_key: audioKey }),
     }),
   );
+  // The edit capability is only issued once, at creation — keep it client-side.
+  try {
+    localStorage.setItem(`cuepoint-edit-${set.id}`, set.edit_token);
+  } catch {
+    /* private mode — import will be unavailable */
+  }
+  return set;
+}
+
+export function editToken(id: string): string | null {
+  try {
+    return localStorage.getItem(`cuepoint-edit-${id}`);
+  } catch {
+    return null;
+  }
 }
 
 export async function getAnalysis(id: string) {
@@ -100,12 +115,12 @@ export async function getWaveform(id: string) {
   return asJson<{ waveform: number[]; duration_s: number }>(await fetch(`${API_URL}/sets/${id}/waveform`));
 }
 
-export async function importTracklist(id: string, text: string) {
+export async function importTracklist(id: string, text: string, token: string) {
   return asJson<{ named: number; segments: ApiSegment[] }>(
     await fetch(`${API_URL}/sets/${id}/tracklist`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, edit_token: token }),
     }),
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Nav } from '../components/Nav';
-import { audioUrl, getAnalysis, getWaveform, importTracklist, type ApiSegment } from '../lib/api';
+import { audioUrl, editToken, getAnalysis, getWaveform, importTracklist, type ApiSegment } from '../lib/api';
 import {
   BLEND_HALF_MIN,
   MATCH_THRESHOLD,
@@ -273,11 +273,14 @@ export function Analysis() {
 
   const transitions = useMemo(() => (view ? computeTransitions(view) : []), [view]);
 
+  const canEdit = !isDemo && editToken(id) !== null;
+
   async function doImport() {
-    if (!importText.trim() || importBusy) return;
+    const token = editToken(id);
+    if (!importText.trim() || importBusy || !token) return;
     setImportBusy(true);
     try {
-      const res = await importTracklist(id, importText);
+      const res = await importTracklist(id, importText, token);
       setView((v) => (v ? { ...v, segments: res.segments.map(apiSegToView) } : v));
       setToast(`Named ${res.named} of ${res.segments.length} tracks`);
       setImportOpen(false);
@@ -391,7 +394,7 @@ export function Analysis() {
                 </svg>
               )}
             </button>
-            {!view.isSample && (
+            {canEdit && (
               <button type="button" className="btn" onClick={() => setImportOpen((o) => !o)}>
                 Import tracklist
               </button>
@@ -405,7 +408,7 @@ export function Analysis() {
           </div>
         </div>
 
-        {importOpen && !view.isSample && (
+        {importOpen && canEdit && (
           <div className="import-panel">
             <label className="mono-label muted" htmlFor="tracklist-text">
               Paste a timestamped tracklist — “[0:04:30] Artist - Title” or “04:40 | Artist - Title”
