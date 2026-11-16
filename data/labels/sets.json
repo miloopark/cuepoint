@@ -1,0 +1,20 @@
+{
+  "sets": [
+    {
+      "id": "cloonee-b2b-prospa-destino",
+      "title": "Cloonee B2B Prospa — Live at Destino, Ibiza",
+      "audio": "data/mixes/cloonee-b2b-prospa-destino.mp3",
+      "labels": "data/labels/cloonee-b2b-prospa-destino.txt",
+      "duration_s": 5409.32,
+      "notes": "Tracklist (ends 1:26:35) is consistent with the 90.2-minute file."
+    },
+    {
+      "id": "franky-rizardo-music-on-destino",
+      "title": "Franky Rizardo at Music On, Destino Ibiza 2026",
+      "audio": "data/mixes/franky-rizardo-music-on-destino.mp3",
+      "labels": "data/labels/franky-rizardo-music-on-destino.txt",
+      "duration_s": 5259.69,
+      "notes": "PARTIAL RECORDING: file is 87.7 min but the tracklist runs to 3:51:00. Only labels within the file duration are usable, and alignment to the start of the set is unverified — confirm against detected transitions before trusting."
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+[project]
+name = "cuepoint-analysis"
+version = "0.1.0"
+description = "DSP package for Cuepoint: tempo, key, energy, transition detection for DJ mixes"
+requires-python = ">=3.12"
+dependencies = [
+    "librosa>=0.10",
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "soundfile>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.4",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]

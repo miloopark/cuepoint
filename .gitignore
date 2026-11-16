@@ -8,3 +8,4 @@ dist/
 __pycache__/
 .venv/
 *.tsbuildinfo
+data/mixes/

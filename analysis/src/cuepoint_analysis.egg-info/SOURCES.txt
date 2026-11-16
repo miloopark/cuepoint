@@ -1,0 +1,8 @@
+pyproject.toml
+src/cuepoint_analysis/__init__.py
+src/cuepoint_analysis.egg-info/PKG-INFO
+src/cuepoint_analysis.egg-info/SOURCES.txt
+src/cuepoint_analysis.egg-info/dependency_links.txt
+src/cuepoint_analysis.egg-info/requires.txt
+src/cuepoint_analysis.egg-info/top_level.txt
+tests/test_labels.py
