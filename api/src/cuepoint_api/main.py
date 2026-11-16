@@ -132,17 +132,29 @@ def _current_payload(set_id: str) -> dict:
         return _status_payload(rec) if rec else {"status": "failed", "error": "not found"}
 
 
+# Going async removed the threadpool's implicit cap on concurrent streams; this is
+# the explicit one. Each stream polls the DB once per second while held.
+_SSE_SLOTS = asyncio.Semaphore(32)
+
+
 @app.get("/sets/{set_id}/events")
 async def set_events(set_id: str) -> StreamingResponse:
+    try:
+        await asyncio.wait_for(_SSE_SLOTS.acquire(), timeout=0.1)
+    except TimeoutError:
+        raise HTTPException(status_code=503, detail="too many progress streams open; retry shortly")
+
     async def stream():
-        # Async so each viewer costs a coroutine, not a threadpool thread; bounded to
-        # 10 min (a 90-min mix analyzes in under a minute).
-        for _ in range(600):
-            payload = await run_in_threadpool(_current_payload, set_id)
-            yield f"data: {json.dumps(payload)}\n\n"
-            if payload["status"] in ("done", "failed"):
-                return
-            await asyncio.sleep(1.0)
+        try:
+            # Bounded to 10 min (a 90-min mix analyzes in under a minute).
+            for _ in range(600):
+                payload = await run_in_threadpool(_current_payload, set_id)
+                yield f"data: {json.dumps(payload)}\n\n"
+                if payload["status"] in ("done", "failed"):
+                    return
+                await asyncio.sleep(1.0)
+        finally:
+            _SSE_SLOTS.release()
 
     return StreamingResponse(
         stream(),
