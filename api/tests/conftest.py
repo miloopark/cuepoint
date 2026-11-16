@@ -17,5 +17,6 @@ def client(monkeypatch):
     from cuepoint_api import main
 
     monkeypatch.setattr(main, "enqueue_analysis", lambda set_id: None)
+    monkeypatch.setattr(main, "head_size", lambda key: 1024)
     with TestClient(main.app) as c:
         yield c

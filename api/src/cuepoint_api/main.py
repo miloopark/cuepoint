@@ -16,7 +16,7 @@ from .config import settings
 from .db import SessionLocal, engine
 from .models import Base, SetRecord
 from .queueing import enqueue_analysis, read_progress
-from .storage import ensure_bucket, presign_get, presign_put
+from .storage import ensure_bucket, head_size, presign_get, presign_put
 
 
 @asynccontextmanager
@@ -36,6 +36,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+ALLOWED_CONTENT_TYPES = {
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/flac",
+    "audio/aiff",
+    "audio/x-aiff",
+    "audio/mp4",
+    "audio/x-m4a",
+    "audio/aac",
+}
+# Exactly the shape create_upload issues — anything else is a forged key.
+AUDIO_KEY_RE = re.compile(r"uploads/[0-9a-f]{32}/[A-Za-z0-9._-]{1,80}")
 
 
 class UploadRequest(BaseModel):
@@ -76,13 +92,22 @@ def _status_payload(rec: SetRecord) -> dict:
 
 @app.post("/uploads")
 def create_upload(req: UploadRequest) -> dict:
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", req.filename)[-80:]
+    if req.content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(status_code=400, detail="unsupported content type")
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", req.filename)[-80:] or "audio"
     key = f"uploads/{uuid.uuid4().hex}/{safe}"
     return {"key": key, "upload_url": presign_put(key, req.content_type)}
 
 
 @app.post("/sets", status_code=201)
 def create_set(req: CreateSetRequest) -> dict:
+    if not AUDIO_KEY_RE.fullmatch(req.audio_key):
+        raise HTTPException(status_code=400, detail="invalid audio key")
+    size = head_size(req.audio_key)
+    if size is None:
+        raise HTTPException(status_code=400, detail="no uploaded file at that key")
+    if size > settings.max_upload_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"file exceeds {settings.max_upload_mb} MB cap")
     with SessionLocal() as db:
         rec = SetRecord(title=req.title, audio_key=req.audio_key)
         db.add(rec)
@@ -101,7 +126,8 @@ def get_set(set_id: str) -> dict:
 @app.get("/sets/{set_id}/events")
 def set_events(set_id: str) -> StreamingResponse:
     def stream():
-        while True:
+        # Bounded: a worst-case job is minutes, not hours; don't pin threads forever.
+        for _ in range(1800):
             with SessionLocal() as db:
                 rec = db.get(SetRecord, set_id)
                 payload = _status_payload(rec) if rec else {"status": "failed", "error": "not found"}

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import boto3
 from botocore.client import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from .config import settings
 
@@ -44,6 +44,14 @@ def presign_get(key: str, expires_s: int = 3600) -> str:
         Params={"Bucket": settings.s3_bucket, "Key": key},
         ExpiresIn=expires_s,
     )
+
+
+def head_size(key: str) -> int | None:
+    """Object size in bytes, or None if it doesn't exist."""
+    try:
+        return int(client().head_object(Bucket=settings.s3_bucket, Key=key)["ContentLength"])
+    except (ClientError, BotoCoreError):
+        return None
 
 
 def download_to(key: str, path: str | Path) -> None:

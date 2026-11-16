@@ -75,6 +75,8 @@ def run_analysis(set_id: str) -> None:
             db.commit()
         publish_progress(set_id, 1.0, "done")
     except Exception:
-        _update_set(set_id, status="failed", error=traceback.format_exc(limit=5))
+        # Full traceback goes to the worker log only; API consumers get a generic message.
+        print(f"[worker] analysis failed for set {set_id}\n{traceback.format_exc()}", flush=True)
+        _update_set(set_id, status="failed", error="Analysis failed — the file may be corrupt or unsupported.")
         publish_progress(set_id, 1.0, "failed")
         raise

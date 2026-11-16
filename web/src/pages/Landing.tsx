@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type DragEvent, type R
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Nav } from '../components/Nav';
 import { LogoMark } from '../components/Logo';
+import { createSet, requestUpload, uploadFile } from '../lib/api';
 import { BLEND_HALF_MIN, SAMPLE_DURATION_MIN, pct, sampleBars, sampleCuts } from '../lib/sample';
 
 const MAX_BYTES = 200 * 1024 * 1024;
@@ -154,9 +155,10 @@ function Upload() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadPct, setUploadPct] = useState<number | null>(null);
 
-  function accept(file: File | undefined) {
-    if (!file) return;
+  async function accept(file: File | undefined) {
+    if (!file || uploadPct !== null) return;
     if (!file.type.startsWith('audio/') && !/\.(mp3|wav|flac|aiff?|m4a)$/i.test(file.name)) {
       setError('That doesn’t look like an audio file.');
       return;
@@ -166,8 +168,17 @@ function Upload() {
       return;
     }
     setError(null);
-    // TODO: POST /uploads for a presigned URL, PUT the file, then POST /sets.
-    navigate('/processing', { state: { fileName: file.name, size: file.size } });
+    setUploadPct(0);
+    try {
+      const { key, upload_url } = await requestUpload(file.name, file.type || 'audio/mpeg');
+      await uploadFile(upload_url, file, setUploadPct);
+      const title = file.name.replace(/\.[^.]+$/, '');
+      const set = await createSet(title, key);
+      navigate('/processing', { state: { setId: set.id, fileName: file.name, size: file.size } });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Upload failed — is the API running?');
+      setUploadPct(null);
+    }
   }
 
   function onDrop(e: DragEvent<HTMLLabelElement>) {
@@ -200,10 +211,12 @@ function Upload() {
           onDrop={onDrop}
         >
           <span>
-            <span className="drop-title">Drop a mix here</span>
+            <span className="drop-title">
+              {uploadPct === null ? 'Drop a mix here' : `Uploading… ${uploadPct}%`}
+            </span>
             <span className="drop-hint">MP3 · WAV · FLAC · AIFF — up to 200 MB / 2 hours</span>
           </span>
-          <span className="btn btn-solid btn-sm drop-btn">Choose file</span>
+          <span className="btn btn-solid btn-sm drop-btn">{uploadPct === null ? 'Choose file' : 'Uploading'}</span>
           <input
             ref={inputRef}
             id="mix"

@@ -2,7 +2,18 @@
 
 Upload a recorded DJ mix and get back its timeline: where each track starts and ends, tempo and key over time, the energy curve, and the name of each track, identified by a hand-written audio fingerprinting engine.
 
-> Status: frontend only. The pages run on sample data until the analysis worker and API are in place.
+> Status: v1 runs end to end locally — browser upload (presigned PUT to object storage),
+> queued analysis with live SSE progress, and a timeline rendered from real results.
+> Track identification (fingerprinting) is not built yet, so tracks show as "Unidentified".
+
+## Run it locally
+
+```bash
+docker compose up -d                          # postgres :5433, redis :6379, seaweedfs s3 :8333
+cd api && .venv/bin/uvicorn cuepoint_api.main:app --port 8000
+cd api && .venv/bin/rq worker --worker-class rq.SimpleWorker analysis
+cd web && npm run dev                         # http://localhost:5173
+```
 
 ## Repo layout
 

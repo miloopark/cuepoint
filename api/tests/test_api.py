@@ -35,7 +35,7 @@ def test_presign_upload_returns_key_and_url(client):
 
 
 def test_create_set_and_get_status(client):
-    r = client.post("/sets", json={"title": "My Mix", "audio_key": "uploads/abc/mix.mp3"})
+    r = client.post("/sets", json={"title": "My Mix", "audio_key": "uploads/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/mix.mp3"})
     assert r.status_code == 201
     set_id = r.json()["id"]
     assert r.json()["status"] == "queued"
@@ -50,7 +50,7 @@ def test_get_missing_set_404(client):
 
 
 def test_analysis_conflict_before_done(client):
-    r = client.post("/sets", json={"title": "Pending", "audio_key": "uploads/abc/mix.mp3"})
+    r = client.post("/sets", json={"title": "Pending", "audio_key": "uploads/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/mix.mp3"})
     set_id = r.json()["id"]
     assert client.get(f"/sets/{set_id}/analysis").status_code == 409
 
