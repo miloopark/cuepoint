@@ -40,6 +40,7 @@ export function Processing() {
     const es = new EventSource(eventsUrl(upload.setId));
     es.onmessage = (e) => {
       const d = JSON.parse(e.data) as { status: string; progress: number; error: string | null };
+      if (d.status === 'busy') return; // server at stream capacity; EventSource will reconnect
       setProgress(Math.round((d.progress ?? 0) * 100));
       if (d.status === 'done') {
         es.close();

@@ -132,29 +132,50 @@ def _current_payload(set_id: str) -> dict:
         return _status_payload(rec) if rec else {"status": "failed", "error": "not found"}
 
 
-# Going async removed the threadpool's implicit cap on concurrent streams; this is
-# the explicit one. Each stream polls the DB once per second while held.
-_SSE_SLOTS = asyncio.Semaphore(32)
+# Going async removed the threadpool's implicit cap on concurrent streams; these are
+# the explicit ones: a global cap plus a per-set cap so no one set's viewers (or one
+# abuser) can occupy every slot. Permits are acquired and released inside the
+# generator so a response that is never iterated can't leak one.
+_SSE_GLOBAL_SLOTS = asyncio.Semaphore(32)
+_SSE_PER_SET_MAX = 4
+_sse_per_set: dict[str, int] = {}
+
+_BUSY_EVENT = f"data: {json.dumps({'status': 'busy'})}\n\n"
 
 
 @app.get("/sets/{set_id}/events")
 async def set_events(set_id: str) -> StreamingResponse:
-    try:
-        await asyncio.wait_for(_SSE_SLOTS.acquire(), timeout=0.1)
-    except TimeoutError:
-        raise HTTPException(status_code=503, detail="too many progress streams open; retry shortly")
+    def check_exists() -> None:
+        with SessionLocal() as db:
+            _set_or_404(db, set_id)
+
+    await run_in_threadpool(check_exists)  # forged ids never hold stream resources
 
     async def stream():
+        if _sse_per_set.get(set_id, 0) >= _SSE_PER_SET_MAX:
+            yield _BUSY_EVENT
+            return
         try:
-            # Bounded to 10 min (a 90-min mix analyzes in under a minute).
-            for _ in range(600):
+            await asyncio.wait_for(_SSE_GLOBAL_SLOTS.acquire(), timeout=2.0)
+        except TimeoutError:
+            yield _BUSY_EVENT  # EventSource auto-reconnects after a pause
+            return
+        _sse_per_set[set_id] = _sse_per_set.get(set_id, 0) + 1
+        try:
+            # Short hold; longer jobs ride EventSource's automatic reconnect.
+            for _ in range(180):
                 payload = await run_in_threadpool(_current_payload, set_id)
                 yield f"data: {json.dumps(payload)}\n\n"
                 if payload["status"] in ("done", "failed"):
                     return
                 await asyncio.sleep(1.0)
         finally:
-            _SSE_SLOTS.release()
+            _SSE_GLOBAL_SLOTS.release()
+            remaining = _sse_per_set.get(set_id, 1) - 1
+            if remaining <= 0:
+                _sse_per_set.pop(set_id, None)
+            else:
+                _sse_per_set[set_id] = remaining
 
     return StreamingResponse(
         stream(),
