@@ -9,9 +9,6 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from sqlalchemy import or_ as sa_or
-from sqlalchemy import update as sa_update
-
 from botocore.exceptions import BotoCoreError, ClientError
 from cuepoint_analysis.labels import parse_tracklist
 from fastapi import FastAPI, HTTPException
@@ -19,6 +16,8 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import or_ as sa_or
+from sqlalchemy import update as sa_update
 
 from .config import settings
 from .db import SessionLocal, engine
