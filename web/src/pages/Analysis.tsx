@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Nav } from '../components/Nav';
 import {
@@ -375,6 +375,12 @@ export function Analysis() {
     }
   }
 
+  function seekFromEvent(e: ReactMouseEvent<HTMLElement>) {
+    const r = e.currentTarget.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    playFrom(frac * D);
+  }
+
   function playFrom(min: number | null) {
     const el = audioRef.current;
     if (!el) {
@@ -581,7 +587,7 @@ export function Analysis() {
             </div>
 
             <div className="lanes">
-              <div aria-hidden="true" className="lane lane-axis">
+              <div aria-hidden="true" className="lane lane-axis is-seekable" onClick={seekFromEvent}>
                 {ticks.map((m) => (
                   <span key={m} style={{ left: `${pctD(m)}%` }}>
                     {m}:00
@@ -589,7 +595,7 @@ export function Analysis() {
                 ))}
               </div>
 
-              <div aria-hidden="true" className="lane lane-energy">
+              <div aria-hidden="true" className="lane lane-energy is-seekable" onClick={seekFromEvent}>
                 <div className="energy-fill" style={{ clipPath: energyShape.clip }} />
                 <svg viewBox="0 0 1000 100" preserveAspectRatio="none">
                   <polyline
@@ -602,7 +608,7 @@ export function Analysis() {
                 </svg>
               </div>
 
-              <div aria-hidden="true" className="lane lane-wave wave">
+              <div aria-hidden="true" className="lane lane-wave wave is-seekable" onClick={seekFromEvent}>
                 {view.wave.map((h, i) => (
                   <i key={i} style={{ height: `${h}%`, background: waveColors[i] }} />
                 ))}
@@ -642,7 +648,7 @@ export function Analysis() {
                   ))}
               </div>
 
-              <div aria-hidden="true" className="lane lane-bpm">
+              <div aria-hidden="true" className="lane lane-bpm is-seekable" onClick={seekFromEvent}>
                 <svg viewBox="0 0 1000 100" preserveAspectRatio="none">
                   <polyline
                     points={bpmChart.points}
@@ -762,6 +768,7 @@ export function Analysis() {
                   setTkHover(best);
                 }}
                 onMouseLeave={() => setTkHover(null)}
+                onClick={seekFromEvent}
               >
                 <svg viewBox="0 0 1000 100" preserveAspectRatio="none">
                   <polyline

@@ -582,6 +582,9 @@ h1, h2, h3, p { margin: 0; }
 
 .tempokey { display: flex; flex-direction: column; gap: 10px; }
 
+.is-seekable,
+.tk-chart { cursor: pointer; }
+
 .tk-chart {
   position: relative;
   height: 130px;
