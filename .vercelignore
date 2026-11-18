@@ -1,5 +1,6 @@
-# Backend (Python) project bundle — keep audio, the web app, and local junk out.
-web/
+# Shared by both Vercel projects (repo-root .vercelignore applies to each):
+# keep audio data and local junk out. web/ must stay included — cuepoint-web
+# builds from it (Root Directory = web).
 data/
 node_modules/
 .venv/
