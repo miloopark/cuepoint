@@ -96,6 +96,22 @@ def test_tempo_cue_peaks_at_bpm_jump():
     assert cue[np.argmin(np.abs(block_times - 50.0))] < 0.1
 
 
+def test_tempo_cue_with_empty_bpm_series_is_zero():
+    # Clips shorter than the tempo tracker's window yield an empty BPM series.
+    block_times = np.arange(0.0, 8.0, 2.0)
+    cue = tempo_cue(block_times, np.array([]), np.array([]))
+    assert np.array_equal(cue, np.zeros(len(block_times)))
+
+
+def test_detect_transitions_survives_short_clip_with_empty_cues():
+    y = _texture("dark", 8.0)
+    empty = np.array([])
+    transitions = detect_transitions(
+        y, SR, bpm_series=(empty, empty), key_series=(empty, [], empty)
+    )
+    assert transitions == []
+
+
 def test_key_cue_peaks_at_key_change():
     block_times = np.arange(0.0, 300.0, 2.0)
     key_times = np.arange(15.0, 300.0, 30.0)

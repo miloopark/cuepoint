@@ -145,6 +145,8 @@ def tempo_cue(
     scale_bpm: float = 10.0,
 ) -> np.ndarray:
     """0-1 score per block: how much the tempo differs span_s before vs after."""
+    if len(bpm_times) == 0:  # clips shorter than the tempo window have no BPM series
+        return np.zeros(len(times))
     before = np.interp(times - span_s, bpm_times, bpm_values)
     after = np.interp(times + span_s, bpm_times, bpm_values)
     return np.clip(np.abs(after - before) / scale_bpm, 0.0, 1.0)
